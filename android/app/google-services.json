@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "439688474767",
+    "project_id": "pawhealth-ef1b9",
+    "storage_bucket": "pawhealth-ef1b9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:439688474767:android:ae7628decde8268f0a40fa",
+        "android_client_info": {
+          "package_name": "com.example.pet_health_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAPJDn7SMQNG8o_0nNEHGOSJW9zQrE1IWA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
