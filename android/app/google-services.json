@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "439688474767-40s1n9lch2led6b3htc5cujs4qup3e7d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.pet_health_app",
+            "certificate_hash": "9bbb3186b2189ef16d8f272bdab59362c395cbb4"
+          }
+        },
+        {
           "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
           "client_type": 3
         }
@@ -29,6 +37,101 @@
             {
               "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "439688474767-c5v4a6lqiffgnqmo2o0rpvamg0rhrji8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mycompany.pawhealth"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:439688474767:android:23a7dff63f1522360a40fa",
+        "android_client_info": {
+          "package_name": "com.mycompany.pawhealth"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "439688474767-v227cn7eg35inbrrhdm1ko5dtf88iddq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mycompany.pawhealth",
+            "certificate_hash": "9bbb3186b2189ef16d8f272bdab59362c395cbb4"
+          }
+        },
+        {
+          "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAPJDn7SMQNG8o_0nNEHGOSJW9zQrE1IWA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "439688474767-c5v4a6lqiffgnqmo2o0rpvamg0rhrji8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mycompany.pawhealth"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:439688474767:android:dc6aea0dbff558540a40fa",
+        "android_client_info": {
+          "package_name": "com.mycompany.pawhealthai"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "439688474767-5m1facbe4kfnvfq60es069tdajhu4nno.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mycompany.pawhealthai",
+            "certificate_hash": "9bbb3186b2189ef16d8f272bdab59362c395cbb4"
+          }
+        },
+        {
+          "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAPJDn7SMQNG8o_0nNEHGOSJW9zQrE1IWA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "439688474767-fjivjlt7ccu0eumk1knkidei3c038qok.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "439688474767-c5v4a6lqiffgnqmo2o0rpvamg0rhrji8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.mycompany.pawhealth"
+              }
             }
           ]
         }

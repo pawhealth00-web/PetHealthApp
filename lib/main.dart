@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
-import 'screens/login_page.dart'; // 引入我們剛拆分出來的登入頁面
 import 'package:firebase_core/firebase_core.dart';
 
-void main() async {
-  // 1. 確保 Flutter 核心已經準備好
+import 'firebase_options.dart';
+import 'screens/login_page.dart';
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 2. 喚醒並啟動 Firebase
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(const PetApp());
 }
@@ -18,7 +20,7 @@ class PetApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
-      debugShowCheckedModeBanner: false, // 隱藏右上角的 DEBUG 標籤
+      debugShowCheckedModeBanner: false,
       home: LoginPage(),
     );
   }
