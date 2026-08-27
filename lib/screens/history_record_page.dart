@@ -1,280 +1,363 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class HistoryRecordPage extends StatefulWidget {
   const HistoryRecordPage({super.key});
+
   @override
   State<HistoryRecordPage> createState() => _HistoryRecordPageState();
 }
 
 class _HistoryRecordPageState extends State<HistoryRecordPage> {
-  // 1. 健康存摺模擬資料庫
-  final List<Map<String, dynamic>> _healthRecords = [
-    {"date": "2026-07-10", "type": "疫苗", "title": "狂犬病與十合一疫苗", "clinic": "安心動物醫院", "note": "打完有點想睡覺，需觀察食慾"},
-    {"date": "2026-06-15", "type": "看診", "title": "年度健康檢查", "clinic": "快樂獸醫院", "note": "體重過重，醫生建議減少零食並增加運動量"},
-    {"date": "2026-05-01", "type": "驅蟲", "title": "心絲蟲與跳蚤預防", "clinic": "居家點藥", "note": "全能狗S (下個月記得再吃)"},
-  ];
+  static const _green = Color(0xFF2E7D5B);
+  String? _selectedPetId;
 
-  // 2. 新增：寵物日常模擬資料庫 (包含飲食與排便)
-  final List<Map<String, dynamic>> _dailyRecords = [
-    {
-      "date": "2026-07-20",
-      "type": "飲食",
-      "status": "正常進食",
-      "water": "正常喝水",
-      "note": "今天食慾很好，吃了一整碗乾糧！"
-    },
-    {
-      "date": "2026-07-20",
-      "type": "排便",
-      "status": "形狀漂亮(條狀)",
-      "note": "早上去公園散步時上的，非常健康。"
-    },
-    {
-      "date": "2026-07-19",
-      "type": "排便",
-      "status": "軟便或拉肚子",
-      "note": "可能昨天的零食吃太多了，明天要減少給予。"
-    },
-    {
-      "date": "2026-07-19",
-      "type": "飲食",
-      "status": "挑食或食慾不佳",
-      "water": "喝水量偏少",
-      "note": "天氣太熱不想吃飯，加了肉泥才願意吃。"
-    },
-  ];
+  Query<Map<String, dynamic>> get _petsQuery => FirebaseFirestore.instance
+      .collection('pets')
+      .where('owner_uid', isEqualTo: FirebaseAuth.instance.currentUser?.uid ?? '');
 
-  // 呼叫底部彈出視窗的函式 (針對健康存摺)
-  void _showAddRecordBottomSheet() {
-    showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (context) {
-          return Container(
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-            child: _AddMedicalRecordForm(
-              onSave: (newRecord) {
-                setState(() => _healthRecords.insert(0, newRecord));
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已成功新增醫療紀錄！'), backgroundColor: Colors.teal));
-              },
-            ),
-          );
-        }
-    );
-  }
+  Query<Map<String, dynamic>> _recordsQuery(String petId) => FirebaseFirestore
+      .instance
+      .collection('health_records')
+      .where('petId', isEqualTo: petId);
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-            title: const Text("歷史紀錄"),
-            backgroundColor: Colors.teal,
-            bottom: const TabBar(
-                indicatorColor: Colors.white,
-                labelColor: Colors.white,
-                unselectedLabelColor: Colors.white70,
-                tabs: [
-                  Tab(icon: Icon(Icons.medical_information), text: "健康存摺"),
-                  Tab(icon: Icon(Icons.calendar_month), text: "寵物日常")
-                ]
-            )
-        ),
-        body: TabBarView(
-            children: [
-              _healthRecords.isEmpty ? _buildEmptyState(Icons.medical_services, "尚無健康存摺紀錄", "這裡未來可以紀錄疫苗、看診等醫療資訊") : _buildHealthRecordList(),
-              _dailyRecords.isEmpty ? _buildEmptyState(Icons.restaurant_menu, "尚無日常紀錄", "前往「飲食紀錄」或「排便追蹤」\n頁面開始紀錄") : _buildDailyRecordList(),
-            ]
-        ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: _showAddRecordBottomSheet,
-          backgroundColor: Colors.teal,
-          elevation: 4,
-          child: const Icon(Icons.add, color: Colors.white, size: 28),
-        ),
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7F2),
+      appBar: AppBar(
+        title: const Text('健康存摺', style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
+      ),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _petsQuery.snapshots(),
+        builder: (context, petSnapshot) {
+          if (petSnapshot.hasError) return _error('寵物資料讀取失敗：${petSnapshot.error}');
+          if (!petSnapshot.hasData) return const Center(child: CircularProgressIndicator(color: _green));
+          final pets = petSnapshot.data!.docs;
+          if (pets.isEmpty) return _error('尚未建立寵物資料');
+
+          final selectedId = pets.any((p) => p.id == _selectedPetId)
+              ? _selectedPetId!
+              : pets.first.id;
+          final selectedPet = pets.firstWhere((p) => p.id == selectedId);
+
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _recordsQuery(selectedId).snapshots(),
+            builder: (context, recordSnapshot) {
+              if (recordSnapshot.hasError) return _error('健康紀錄讀取失敗：${recordSnapshot.error}');
+              if (!recordSnapshot.hasData) return const Center(child: CircularProgressIndicator(color: _green));
+              final records = [...recordSnapshot.data!.docs];
+              records.sort((a, b) => _dateOf(b.data()).compareTo(_dateOf(a.data())));
+              return _dashboard(pets, selectedPet, records);
+            },
+          );
+        },
+      ),
+      floatingActionButton: _selectedPetId == null
+          ? null
+          : FloatingActionButton.extended(
+        onPressed: () => _showAddMedicalRecord(_selectedPetId!),
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add),
+        label: const Text('新增醫療紀錄'),
       ),
     );
   }
 
-  Widget _buildEmptyState(IconData icon, String title, String subtitle) {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(icon, size: 100, color: Colors.teal.withValues(alpha: 0.3)), const SizedBox(height: 24), Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87)), const SizedBox(height: 12), Text(subtitle, textAlign: TextAlign.center, style: const TextStyle(fontSize: 16, color: Colors.grey, height: 1.5))]));
-  }
+  Widget _dashboard(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> pets,
+      QueryDocumentSnapshot<Map<String, dynamic>> selectedPet,
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> records,
+      ) {
+    if (_selectedPetId != selectedPet.id) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _selectedPetId = selectedPet.id);
+      });
+    }
+    final pet = selectedPet.data();
+    final score = _healthScore(records);
+    final latest = records.isEmpty ? '尚無紀錄' : _displayDate(_dateOf(records.first.data()));
+    final medical = records.where((r) => _isMedical(r.data())).toList();
 
-  Widget _buildHealthRecordList() {
-    return ListView.builder(
-        padding: const EdgeInsets.only(top: 16, left: 16, right: 16, bottom: 80),
-        itemCount: _healthRecords.length,
-        itemBuilder: (context, index) {
-          final record = _healthRecords[index];
-          IconData iconData = Icons.bug_report;
-          Color iconColor = Colors.purple;
-          if (record['type'] == '疫苗') { iconData = Icons.vaccines; iconColor = Colors.green; }
-          else if (record['type'] == '看診') { iconData = Icons.local_hospital; iconColor = Colors.redAccent; }
-
-          return Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.1), shape: BoxShape.circle), child: Icon(iconData, color: iconColor, size: 28)),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Expanded(child: Text(record['title'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)), Text(record['date'], style: const TextStyle(color: Colors.grey, fontSize: 14))]),
-                        const SizedBox(height: 8),
-                        Row(children: [const Icon(Icons.location_on, size: 16, color: Colors.grey), const SizedBox(width: 4), Text(record['clinic'], style: const TextStyle(color: Colors.black87))]),
-                        const SizedBox(height: 8),
-                        Container(width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8), decoration: BoxDecoration(color: Colors.grey[100], borderRadius: BorderRadius.circular(6)), child: Text(record['note'], style: const TextStyle(color: Colors.black54, fontSize: 14, height: 1.4)))
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+      children: [
+        _petSelector(pets, selectedPet.id),
+        const SizedBox(height: 16),
+        _summaryCard(pet, score, latest, records),
+        const SizedBox(height: 16),
+        const Text('健康項目', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 1.65,
+          children: [
+            _metric('飲食', Icons.restaurant, Colors.orange, _categoryScore(records, 'diet'), _count(records, 'diet')),
+            _metric('排便', Icons.pets, Colors.brown, _categoryScore(records, 'poop'), _count(records, 'poop')),
+            _metric('行為', Icons.mood, Colors.blue, _categoryScore(records, 'behavior'), _count(records, 'behavior')),
+            _metric('醫療', Icons.medical_services, Colors.redAccent, 100, medical.length),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('最近紀錄', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text('共 ${records.length} 筆', style: const TextStyle(color: Colors.grey)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (records.isEmpty)
+          _emptyCard()
+        else
+          ...records.take(20).map((r) => _recordCard(r.data())),
+      ],
     );
   }
 
-  // 3. 升級：打造精緻的「寵物日常」卡片列表
-  Widget _buildDailyRecordList() {
-    return ListView.builder(
-        padding: const EdgeInsets.only(top: 16, left: 16, right: 16, bottom: 80),
-        itemCount: _dailyRecords.length,
-        itemBuilder: (context, index) {
-          final record = _dailyRecords[index];
-          bool isDiet = record['type'] == '飲食';
-
-          // 根據類型決定圖示與顏色
-          IconData iconData = isDiet ? Icons.restaurant : Icons.pets;
-          Color iconColor = isDiet ? Colors.orange : Colors.brown;
-
-          return Card(
-            margin: const EdgeInsets.only(bottom: 16),
-            elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: iconColor.withValues(alpha: 0.3), width: 1)),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 左側圓形 Icon 區塊
-                  Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.1), shape: BoxShape.circle),
-                      child: Icon(iconData, color: iconColor, size: 28)
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 頂部：類型標籤與日期
-                        Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text("${record['type']}紀錄", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: iconColor)),
-                              Text(record['date'], style: const TextStyle(color: Colors.grey, fontSize: 14))
-                            ]
-                        ),
-                        const SizedBox(height: 12),
-
-                        // 中間：詳細狀態內容
-                        if (isDiet) ...[
-                          Text("🍽️ 飲食狀況：${record['status']}", style: const TextStyle(fontSize: 15, color: Colors.black87)),
-                          const SizedBox(height: 6),
-                          Text("💧 喝水狀況：${record['water']}", style: const TextStyle(fontSize: 15, color: Colors.black87)),
-                        ] else ...[
-                          Text("💩 糞便狀態：${record['status']}", style: const TextStyle(fontSize: 15, color: Colors.black87)),
-                        ],
-
-                        // 底部：備註區塊 (如果有填寫的話)
-                        if (record['note'] != null && record['note'].isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                              decoration: BoxDecoration(color: Colors.grey[50], borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.grey.shade200)),
-                              child: Text("備註：${record['note']}", style: const TextStyle(color: Colors.black54, fontSize: 14, height: 1.4))
-                          )
-                        ]
-                      ],
-                    ),
-                  ),
-                ],
+  Widget _petSelector(List<QueryDocumentSnapshot<Map<String, dynamic>>> pets, String selectedId) {
+    return SizedBox(
+      height: 82,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: pets.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        itemBuilder: (_, index) {
+          final doc = pets[index];
+          final data = doc.data();
+          final selected = doc.id == selectedId;
+          final image = (data['imageUrl'] ?? data['image_url'] ?? '').toString();
+          return InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: () => setState(() => _selectedPetId = doc.id),
+            child: Container(
+              width: 142,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFFE1F1E8) : Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: selected ? _green : Colors.grey.shade200, width: selected ? 2 : 1),
               ),
+              child: Row(children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundColor: Colors.grey.shade200,
+                  backgroundImage: image.isEmpty ? null : NetworkImage(image),
+                  child: image.isEmpty ? const Icon(Icons.pets, color: _green) : null,
+                ),
+                const SizedBox(width: 9),
+                Expanded(child: Text((data['name'] ?? '未命名').toString(), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: selected ? FontWeight.bold : FontWeight.w500))),
+              ]),
             ),
           );
-        }
+        },
+      ),
     );
   }
+
+  Widget _summaryCard(Map<String, dynamic> pet, int score, String latest, List<QueryDocumentSnapshot<Map<String, dynamic>>> records) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Color(0xFF2E7D5B), Color(0xFF5EA47F)]),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const [BoxShadow(color: Color(0x332E7D5B), blurRadius: 12, offset: Offset(0, 6))],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          SizedBox(
+            width: 92,
+            height: 92,
+            child: Stack(alignment: Alignment.center, children: [
+              CircularProgressIndicator(value: score / 100, strokeWidth: 9, backgroundColor: Colors.white24, color: Colors.white),
+              Column(mainAxisSize: MainAxisSize.min, children: [Text('$score', style: const TextStyle(color: Colors.white, fontSize: 27, fontWeight: FontWeight.bold)), const Text('健康分數', style: TextStyle(color: Colors.white70, fontSize: 11))]),
+            ]),
+          ),
+          const SizedBox(width: 18),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('${pet['name'] ?? '寵物'}的健康狀況', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 7),
+            Text(_summary(records), style: const TextStyle(color: Colors.white, height: 1.4)),
+            const SizedBox(height: 7),
+            Text('最新紀錄：$latest', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          ])),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _metric(String title, IconData icon, Color color, int score, int count) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8)]),
+    child: Row(children: [
+      Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: color.withValues(alpha: .12), shape: BoxShape.circle), child: Icon(icon, color: color)),
+      const SizedBox(width: 10),
+      Expanded(child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.bold)), Text(count == 0 ? '尚無紀錄' : '$score 分・$count 筆', style: const TextStyle(color: Colors.grey, fontSize: 12))])),
+    ]),
+  );
+
+  Widget _recordCard(Map<String, dynamic> data) {
+    final type = (data['recordType'] ?? data['type'] ?? '其他').toString();
+    final config = _typeConfig(type);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        leading: CircleAvatar(backgroundColor: config.$3.withValues(alpha: .12), child: Icon(config.$2, color: config.$3)),
+        title: Text(_recordTitle(data, config.$1), style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(_recordSubtitle(data), maxLines: 2, overflow: TextOverflow.ellipsis),
+        trailing: Text(_displayDate(_dateOf(data)), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      ),
+    );
+  }
+
+  Future<void> _showAddMedicalRecord(String petId) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _MedicalRecordForm(petId: petId),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ 醫療紀錄已儲存至 Firestore'), backgroundColor: _green));
+    }
+  }
+
+  int _count(List<QueryDocumentSnapshot<Map<String, dynamic>>> records, String type) => records.where((r) => (r.data()['recordType'] ?? r.data()['type']) == type).length;
+
+  int _categoryScore(List<QueryDocumentSnapshot<Map<String, dynamic>>> records, String type) {
+    final list = records.where((r) => (r.data()['recordType'] ?? r.data()['type']) == type).take(7);
+    if (list.isEmpty) return 0;
+    var score = 100;
+    for (final r in list) {
+      final text = r.data().values.join(' ').toLowerCase();
+      if (RegExp('嘔吐|腹瀉|拉肚子|帶血|食慾不佳|異常|精神差').hasMatch(text)) score -= 12;
+    }
+    return score.clamp(40, 100);
+  }
+
+  int _healthScore(List<QueryDocumentSnapshot<Map<String, dynamic>>> records) {
+    if (records.isEmpty) return 0;
+    final scores = ['diet', 'poop', 'behavior'].map((t) => _categoryScore(records, t)).where((s) => s > 0).toList();
+    return scores.isEmpty ? 100 : (scores.reduce((a, b) => a + b) / scores.length).round();
+  }
+
+  String _summary(List<QueryDocumentSnapshot<Map<String, dynamic>>> records) {
+    if (records.isEmpty) return '開始記錄飲食、排便與行為後，這裡會顯示健康摘要。';
+    final recent = records.take(7).map((r) => r.data().values.join(' ')).join(' ');
+    if (RegExp('嘔吐|帶血|腹瀉|拉肚子').hasMatch(recent)) return '最近紀錄中有需要留意的症狀，建議持續觀察，若未改善請諮詢獸醫。';
+    if (RegExp('食慾不佳|精神差|喝水量偏少').hasMatch(recent)) return '近期有輕微異常紀錄，請注意食慾、飲水與精神狀態。';
+    return '近期整體狀況穩定，請繼續維持每日健康紀錄。';
+  }
+
+  bool _isMedical(Map<String, dynamic> d) => ['medical', '看診', '疫苗', '驅蟲', '醫療'].contains(d['recordType'] ?? d['type']);
+
+  DateTime _dateOf(Map<String, dynamic> data) {
+    final value = data['recordDate'] ?? data['createdAt'] ?? data['date'];
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return DateTime.tryParse(value?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  String _displayDate(DateTime date) => date.millisecondsSinceEpoch == 0 ? '--' : '${date.month}/${date.day}';
+
+  (String, IconData, Color) _typeConfig(String type) {
+    if (type == 'diet' || type == '飲食') return ('飲食', Icons.restaurant, Colors.orange);
+    if (type == 'poop' || type == '排便') return ('排便', Icons.pets, Colors.brown);
+    if (type == 'behavior' || type == '行為') return ('行為', Icons.mood, Colors.blue);
+    if (type == '疫苗') return ('疫苗', Icons.vaccines, Colors.green);
+    return ('醫療', Icons.medical_services, Colors.redAccent);
+  }
+
+  String _recordTitle(Map<String, dynamic> d, String fallback) => (d['title'] ?? d['foodName'] ?? d['foodType'] ?? d['shape'] ?? d['status'] ?? '$fallback紀錄').toString();
+  String _recordSubtitle(Map<String, dynamic> d) => (d['note'] ?? d['clinic'] ?? d['appetite'] ?? '無補充說明').toString();
+
+  Widget _emptyCard() => Container(padding: const EdgeInsets.all(28), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)), child: const Column(children: [Icon(Icons.health_and_safety_outlined, size: 54, color: _green), SizedBox(height: 10), Text('尚無健康紀錄'), Text('新增飲食、排便、行為或醫療紀錄後會顯示在這裡', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))]));
+  Widget _error(String message) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(message, textAlign: TextAlign.center)));
 }
 
-// 獨立元件：新增醫療紀錄專用表單
-class _AddMedicalRecordForm extends StatefulWidget {
-  final Function(Map<String, dynamic>) onSave;
-  const _AddMedicalRecordForm({required this.onSave});
+class _MedicalRecordForm extends StatefulWidget {
+  final String petId;
+  const _MedicalRecordForm({required this.petId});
+
   @override
-  State<_AddMedicalRecordForm> createState() => _AddMedicalRecordFormState();
+  State<_MedicalRecordForm> createState() => _MedicalRecordFormState();
 }
 
-class _AddMedicalRecordFormState extends State<_AddMedicalRecordForm> {
+class _MedicalRecordFormState extends State<_MedicalRecordForm> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _clinicController = TextEditingController();
-  final TextEditingController _noteController = TextEditingController();
-  String _selectedType = '看診';
-  DateTime _selectedDate = DateTime.now();
+  final _title = TextEditingController();
+  final _clinic = TextEditingController();
+  final _note = TextEditingController();
+  DateTime _date = DateTime.now();
+  String _type = '看診';
+  bool _saving = false;
 
-  Future<void> _pickDate() async {
-    final DateTime? picked = await showDatePicker(context: context, initialDate: _selectedDate, firstDate: DateTime(2020), lastDate: DateTime(2030));
-    if (picked != null) setState(() => _selectedDate = picked);
+  @override
+  void dispose() {
+    _title.dispose();
+    _clinic.dispose();
+    _note.dispose();
+    super.dispose();
   }
 
-  void _submit() {
-    if (_formKey.currentState!.validate()) {
-      final newRecord = {"date": "${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}", "type": _selectedType, "title": _titleController.text, "clinic": _clinicController.text.isEmpty ? "未提供地點" : _clinicController.text, "note": _noteController.text.isEmpty ? "無備註" : _noteController.text};
-      widget.onSave(newRecord);
-      Navigator.pop(context);
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      await FirebaseFirestore.instance.collection('health_records').add({
+        'petId': widget.petId,
+        'recordType': 'medical',
+        'type': _type,
+        'title': _title.text.trim(),
+        'clinic': _clinic.text.trim(),
+        'note': _note.text.trim(),
+        'recordDate': Timestamp.fromDate(_date),
+        'createdAt': FieldValue.serverTimestamp(),
+        'owner_uid': FirebaseAuth.instance.currentUser?.uid,
+      });
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('儲存失敗：$e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom + 24, left: 24, right: 24, top: 24),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text("新增醫療紀錄", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal)),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(child: InkWell(onTap: _pickDate, child: InputDecorator(decoration: const InputDecoration(labelText: "日期", border: OutlineInputBorder(), prefixIcon: Icon(Icons.calendar_today, size: 20)), child: Text("${_selectedDate.year}/${_selectedDate.month}/${_selectedDate.day}")))),
-                const SizedBox(width: 16),
-                Expanded(child: DropdownButtonFormField<String>(value: _selectedType, decoration: const InputDecoration(labelText: "類型", border: OutlineInputBorder(), prefixIcon: Icon(Icons.category, size: 20)), items: ['看診', '疫苗', '驅蟲', '其他'].map((String value) => DropdownMenuItem<String>(value: value, child: Text(value))).toList(), onChanged: (newValue) => setState(() => _selectedType = newValue!))),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextFormField(controller: _titleController, decoration: const InputDecoration(labelText: "項目名稱 (必填，如：年度健檢)", border: OutlineInputBorder(), prefixIcon: Icon(Icons.edit)), validator: (value) => (value == null || value.isEmpty) ? '請填寫項目名稱' : null),
-            const SizedBox(height: 16),
-            TextFormField(controller: _clinicController, decoration: const InputDecoration(labelText: "醫院名稱 (選填)", border: OutlineInputBorder(), prefixIcon: Icon(Icons.local_hospital))),
-            const SizedBox(height: 16),
-            TextFormField(controller: _noteController, maxLines: 3, decoration: const InputDecoration(labelText: "醫生備註 / 觀察事項 (選填)", border: OutlineInputBorder(), alignLabelWithHint: true)),
-            const SizedBox(height: 24),
-            ElevatedButton(onPressed: _submit, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: Colors.teal, foregroundColor: Colors.white), child: const Text("儲存紀錄", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-          ],
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 24),
+      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+      child: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('新增醫療紀錄', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold, color: Color(0xFF2E7D5B))),
+            const SizedBox(height: 18),
+            DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: '紀錄類型', border: OutlineInputBorder()), items: ['看診', '疫苗', '驅蟲', '其他'].map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => setState(() => _type = v!)),
+            const SizedBox(height: 12),
+            TextFormField(controller: _title, decoration: const InputDecoration(labelText: '項目名稱', border: OutlineInputBorder()), validator: (v) => v == null || v.trim().isEmpty ? '請輸入項目名稱' : null),
+            const SizedBox(height: 12),
+            TextFormField(controller: _clinic, decoration: const InputDecoration(labelText: '醫院／地點（選填）', border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            ListTile(contentPadding: EdgeInsets.zero, leading: const Icon(Icons.calendar_month), title: Text('${_date.year}/${_date.month}/${_date.day}'), trailing: const Text('選擇日期'), onTap: () async { final value = await showDatePicker(context: context, initialDate: _date, firstDate: DateTime(2000), lastDate: DateTime.now().add(const Duration(days: 365))); if (value != null) setState(() => _date = value); }),
+            TextFormField(controller: _note, maxLines: 3, decoration: const InputDecoration(labelText: '備註（選填）', border: OutlineInputBorder())),
+            const SizedBox(height: 18),
+            FilledButton(onPressed: _saving ? null : _save, style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E7D5B), padding: const EdgeInsets.symmetric(vertical: 15)), child: _saving ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Text('儲存紀錄')),
+          ]),
         ),
       ),
     );
