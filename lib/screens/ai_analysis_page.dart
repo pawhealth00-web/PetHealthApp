@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,7 +22,7 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
   final TextEditingController _questionController = TextEditingController();
   bool _isAnalyzing = false;
 
-  File? _imageFile;
+  Uint8List? _imageBytes;
   final ImagePicker _picker = ImagePicker();
 
   // 📸 挑選或拍攝要分析的照片
@@ -34,15 +34,20 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
       maxWidth: 800,
     );
     if (pickedFile != null) {
-      setState(() {
-        _imageFile = File(pickedFile.path);
-      });
+      final bytes = await pickedFile.readAsBytes();
+      if (!mounted) return;
+      if (bytes.lengthInBytes > 650 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('照片過大，請選擇較小的圖片')));
+        return;
+      }
+      setState(() => _imageBytes = bytes);
     }
   }
 
   // 🚀 將照片與問題送出到 Firebase
   Future<void> _submitForAnalysis() async {
-    if (_imageFile == null && _questionController.text.trim().isEmpty) {
+    if (_imageBytes == null && _questionController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('⚠️ 請至少上傳一張照片，或輸入您想詢問的狀況喔！')),
       );
@@ -57,9 +62,8 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
       String? base64Image;
 
       // 如果有照片，轉成 Base64 準備存入資料庫
-      if (_imageFile != null) {
-        final bytes = await _imageFile!.readAsBytes();
-        base64Image = base64Encode(bytes);
+      if (_imageBytes != null) {
+        base64Image = base64Encode(_imageBytes!);
       }
 
       // 🌟 將分析請求存入 Firestore 的 'ai_analysis_requests' 集合中
@@ -75,11 +79,11 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ 已經成功送出給 AI 囉！')),
+          const SnackBar(content: Text('已儲存分析請求，等待後端處理。')),
         );
         // 清空表單，準備下一次詢問
         setState(() {
-          _imageFile = null;
+          _imageBytes = null;
           _questionController.clear();
         });
       }
@@ -117,7 +121,7 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              '請上傳照片並描述狀況，AI 會為您進行初步分析。',
+              '可上傳照片並描述狀況；請求會先儲存，等待後端處理。',
               style: TextStyle(fontSize: 16, color: Colors.grey),
             ),
             const SizedBox(height: 24),
@@ -132,10 +136,10 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: Colors.teal.shade200, width: 2, style: BorderStyle.solid),
                 ),
-                child: _imageFile != null
+                child: _imageBytes != null
                     ? ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.file(_imageFile!, fit: BoxFit.cover),
+                  child: Image.memory(_imageBytes!, fit: BoxFit.cover),
                 )
                     : Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -174,7 +178,7 @@ class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
                     ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                     : const Icon(Icons.auto_awesome, color: Colors.white),
                 label: Text(
-                  _isAnalyzing ? 'AI 正在努力分析中...' : '送出給 AI 分析',
+                  _isAnalyzing ? '送出中…' : '送出分析請求',
                   style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 style: ElevatedButton.styleFrom(

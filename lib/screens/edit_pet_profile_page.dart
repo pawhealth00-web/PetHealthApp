@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -28,9 +28,11 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
   late TextEditingController _nameController;
   String? _selectedSpecies;
   String? _selectedGender;
+  String _selectedNeutered = '未知';
+  bool _loadingPet = true;
 
   bool _isSaving = false;
-  File? _newImageFile; // 用來裝「新挑選」的照片
+  Uint8List? _newImageBytes;
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -50,6 +52,20 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
     if (genderList.contains(widget.initialGender)) {
       _selectedGender = widget.initialGender;
     }
+    _loadNeutered();
+  }
+
+  Future<void> _loadNeutered() async {
+    try {
+      final pet = await FirebaseFirestore.instance.collection('pets').doc(widget.petId).get();
+      final value = pet.data()?['neutered']?.toString();
+      if (mounted) setState(() {
+        if (['已結紮', '未結紮', '未知'].contains(value)) _selectedNeutered = value!;
+        _loadingPet = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingPet = false);
+    }
   }
 
   // 📸 挑選新照片
@@ -60,9 +76,14 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
       maxWidth: 400,
     );
     if (pickedFile != null) {
-      setState(() {
-        _newImageFile = File(pickedFile.path);
-      });
+      final bytes = await pickedFile.readAsBytes();
+      if (!mounted) return;
+      if (bytes.lengthInBytes > 650 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('照片過大，請選擇較小的圖片')));
+        return;
+      }
+      setState(() => _newImageBytes = bytes);
     }
   }
 
@@ -87,12 +108,13 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
         'name': petName,
         'species': _selectedSpecies,
         'gender': _selectedGender,
+        'neutered': _selectedNeutered,
+        'updatedAt': FieldValue.serverTimestamp(),
       };
 
       // 🌟 如果使用者有選「新照片」，才更新照片文字編碼；沒選就保留原本的
-      if (_newImageFile != null) {
-        final bytes = await _newImageFile!.readAsBytes();
-        updateData['photoBase64'] = base64Encode(bytes);
+      if (_newImageBytes != null) {
+        updateData['photoBase64'] = base64Encode(_newImageBytes!);
       }
 
       // 🌟 關鍵：使用 .doc(petId).update() 針對這隻寵物進行修改
@@ -142,12 +164,12 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
               child: CircleAvatar(
                 radius: 60,
                 backgroundColor: Colors.grey.shade300,
-                backgroundImage: _newImageFile != null
-                    ? FileImage(_newImageFile!) // 如果有選新照片，優先顯示新照片
+                backgroundImage: _newImageBytes != null
+                    ? MemoryImage(_newImageBytes!)
                     : (widget.initialPhotoBase64 != null && widget.initialPhotoBase64!.isNotEmpty
                     ? MemoryImage(base64Decode(widget.initialPhotoBase64!)) // 否則顯示舊的雲端照片
                     : null),
-                child: _newImageFile == null && (widget.initialPhotoBase64 == null || widget.initialPhotoBase64!.isEmpty)
+                child: _newImageBytes == null && (widget.initialPhotoBase64 == null || widget.initialPhotoBase64!.isEmpty)
                     ? Icon(Icons.camera_alt, size: 40, color: Colors.grey.shade600)
                     : null,
               ),
@@ -196,6 +218,17 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
                 .toList(),
             onChanged: (value) => setState(() => _selectedGender = value),
           ),
+          const SizedBox(height: 20),
+          DropdownButtonFormField<String>(
+            value: _selectedNeutered,
+            decoration: const InputDecoration(
+              labelText: '是否結紮', border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.health_and_safety_outlined, color: Colors.brown),
+            ),
+            items: ['已結紮', '未結紮', '未知']
+                .map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+            onChanged: (value) => setState(() => _selectedNeutered = value ?? '未知'),
+          ),
           const SizedBox(height: 32),
 
           // 儲存修改按鈕
@@ -203,7 +236,7 @@ class _EditPetProfilePageState extends State<EditPetProfilePage> {
             width: double.infinity,
             height: 50,
             child: ElevatedButton(
-              onPressed: _isSaving ? null : _updateProfile,
+              onPressed: _isSaving || _loadingPet ? null : _updateProfile,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.brown,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
