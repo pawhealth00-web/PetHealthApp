@@ -1,195 +1,359 @@
-import 'dart:typed_data';
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 
-class HealthAnalysisPage extends StatefulWidget {
-  final String petId;
-  final String petName;
+import 'health_insights.dart';
 
+class HealthAnalysisPage extends StatelessWidget {
   const HealthAnalysisPage({
     super.key,
     required this.petId,
     required this.petName,
   });
 
-  @override
-  State<HealthAnalysisPage> createState() => _HealthAnalysisPageState();
-}
+  final String petId;
+  final String petName;
 
-class _HealthAnalysisPageState extends State<HealthAnalysisPage> {
-  final TextEditingController _questionController = TextEditingController();
-  bool _isAnalyzing = false;
-
-  Uint8List? _imageBytes;
-  final ImagePicker _picker = ImagePicker();
-
-  // 📸 挑選或拍攝要分析的照片
-  Future<void> _pickImage() async {
-    // 這裡我們稍微提高一點品質，讓 AI 看得更清楚，但還是限制大小避免撐爆資料庫
-    final XFile? pickedFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 50,
-      maxWidth: 800,
-    );
-    if (pickedFile != null) {
-      final bytes = await pickedFile.readAsBytes();
-      if (!mounted) return;
-      if (bytes.lengthInBytes > 650 * 1024) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('照片過大，請選擇較小的圖片')));
-        return;
-      }
-      setState(() => _imageBytes = bytes);
-    }
-  }
-
-  // 🚀 將照片與問題送出到 Firebase
-  Future<void> _submitForAnalysis() async {
-    if (_imageBytes == null && _questionController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('⚠️ 請至少上傳一張照片，或輸入您想詢問的狀況喔！')),
-      );
-      return;
-    }
-
-    setState(() {
-      _isAnalyzing = true; // 顯示載入動畫
-    });
-
-    try {
-      String? base64Image;
-
-      // 如果有照片，轉成 Base64 準備存入資料庫
-      if (_imageBytes != null) {
-        base64Image = base64Encode(_imageBytes!);
-      }
-
-      // 🌟 將分析請求存入 Firestore 的 'ai_analysis_requests' 集合中
-      await FirebaseFirestore.instance.collection('ai_analysis_requests').add({
-        'petId': widget.petId,
-        'petName': widget.petName,
-        'question': _questionController.text.trim(),
-        'photoBase64': base64Image,
-        'status': 'pending', // 狀態設為 pending (等待 AI 處理)
-        'aiReply': '',       // 預留欄位給未來的 AI 回覆
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已儲存分析請求，等待後端處理。')),
-        );
-        // 清空表單，準備下一次詢問
-        setState(() {
-          _imageBytes = null;
-          _questionController.clear();
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('❌ 送出失敗：$e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isAnalyzing = false;
-        });
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _questionController.dispose();
-    super.dispose();
-  }
+  static const _green = Color(0xFF174D3A);
+  static const _lightGreen = Color(0xFFEAF4EC);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F8F6),
       appBar: AppBar(
-        title: Text('✨ ${widget.petName} 的 AI 健康分析'),
-        backgroundColor: Colors.teal,
+        title: Text('$petName 的健康分析'),
+        backgroundColor: _green,
+        foregroundColor: Colors.white,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('health_records')
+            .where('petId', isEqualTo: petId)
+            .snapshots(),
+        builder: (context, healthSnapshot) {
+          if (healthSnapshot.hasError) {
+            return _error('健康紀錄讀取失敗：${healthSnapshot.error}');
+          }
+          if (!healthSnapshot.hasData) {
+            return const Center(
+              child: CircularProgressIndicator(color: _green),
+            );
+          }
+
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('pets')
+                .doc(petId)
+                .collection('behavior_records')
+                .snapshots(),
+            builder: (context, behaviorSnapshot) {
+              if (behaviorSnapshot.hasError) {
+                return _error('行為紀錄讀取失敗：${behaviorSnapshot.error}');
+              }
+              if (!behaviorSnapshot.hasData) {
+                return const Center(
+                  child: CircularProgressIndicator(color: _green),
+                );
+              }
+
+              final records = <Map<String, dynamic>>[
+                ...healthSnapshot.data!.docs.map((doc) => doc.data()),
+                ...behaviorSnapshot.data!.docs.map((doc) => doc.data()),
+              ];
+              return _analysis(records);
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _analysis(List<Map<String, dynamic>> allRecords) {
+    final recentRecords = HealthInsights.recent(allRecords)
+        .where((record) => ['diet', 'behavior', 'poop']
+            .contains(HealthInsights.type(record)))
+        .toList()
+      ..sort((a, b) =>
+          HealthInsights.date(b).compareTo(HealthInsights.date(a)));
+
+    final score = HealthInsights.score(recentRecords);
+    final deductions = HealthInsights.deductionBreakdown(recentRecords);
+    final counts = HealthInsights.warningCounts(recentRecords);
+    final sortedDeductions = deductions.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 40),
+      children: [
+        _scoreCard(score, recentRecords.length),
+        const SizedBox(height: 16),
+        const Text(
+          '最近 7 天資料來源',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _green,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
           children: [
-            const Text(
-              '可上傳照片並描述狀況；請求會先儲存，等待後端處理。',
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-            const SizedBox(height: 24),
-
-            // 📸 照片上傳區塊
-            GestureDetector(
-              onTap: _pickImage,
-              child: Container(
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Colors.teal.shade50,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.teal.shade200, width: 2, style: BorderStyle.solid),
-                ),
-                child: _imageBytes != null
-                    ? ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.memory(_imageBytes!, fit: BoxFit.cover),
-                )
-                    : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.add_a_photo, size: 50, color: Colors.teal.shade300),
-                    const SizedBox(height: 12),
-                    Text('點擊上傳便便、皮膚或狀態照片', style: TextStyle(color: Colors.teal.shade700, fontWeight: FontWeight.bold)),
-                  ],
-                ),
+            Expanded(
+              child: _categoryCard(
+                '飲食',
+                'diet',
+                Icons.restaurant_outlined,
+                Colors.orange,
+                recentRecords,
               ),
             ),
-            const SizedBox(height: 24),
-
-            // 📝 狀況描述輸入框
-            TextField(
-              controller: _questionController,
-              maxLines: 3,
-              decoration: InputDecoration(
-                labelText: '狀況描述 (例如：這兩天大便偏軟，這樣正常嗎？)',
-                alignLabelWithHint: true,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: const BorderSide(color: Colors.teal, width: 2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _categoryCard(
+                '行為',
+                'behavior',
+                Icons.mood_outlined,
+                Colors.blue,
+                recentRecords,
               ),
             ),
-            const SizedBox(height: 32),
-
-            // 🚀 送出按鈕
-            SizedBox(
-              height: 56,
-              child: ElevatedButton.icon(
-                onPressed: _isAnalyzing ? null : _submitForAnalysis,
-                icon: _isAnalyzing
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.auto_awesome, color: Colors.white),
-                label: Text(
-                  _isAnalyzing ? '送出中…' : '送出分析請求',
-                  style: const TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  elevation: 4,
-                ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _categoryCard(
+                '排便',
+                'poop',
+                Icons.pets_outlined,
+                Colors.brown,
+                recentRecords,
               ),
             ),
           ],
         ),
+        const SizedBox(height: 22),
+        const Text(
+          '健康扣分明細',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _green,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (recentRecords.isEmpty)
+          _messageCard('最近七天沒有飲食、行為或排便紀錄，請先新增紀錄。')
+        else if (sortedDeductions.isEmpty)
+          _messageCard('最近七天沒有記錄到明顯異常，目前不扣分。')
+        else
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                for (var i = 0; i < sortedDeductions.length; i++) ...[
+                  _deductionRow(
+                    sortedDeductions[i].key,
+                    counts[sortedDeductions[i].key] ?? 1,
+                    sortedDeductions[i].value,
+                  ),
+                  if (i < sortedDeductions.length - 1)
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                ],
+              ],
+            ),
+          ),
+        const SizedBox(height: 22),
+        ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+          collapsedBackgroundColor: Colors.white,
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          collapsedShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            '查看我們設定的扣分規則',
+            style: TextStyle(fontWeight: FontWeight.bold, color: _green),
+          ),
+          children: HealthInsights.penaltyRules.entries
+              .map(
+                (rule) => ListTile(
+                  dense: true,
+                  title: Text(rule.key),
+                  trailing: Text(
+                    '-${rule.value} 分',
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          '※ 此分數是依照使用者填寫的紀錄進行簡易觀察，不代表醫療診斷。若出現血便、黑便、抽搐、持續嘔吐或精神明顯不佳，請儘快諮詢獸醫。',
+          style: TextStyle(color: Colors.grey, height: 1.55),
+        ),
+      ],
+    );
+  }
+
+  Widget _scoreCard(int? score, int recordCount) {
+    final displayScore = score?.toString() ?? '--';
+    final color = score == null
+        ? Colors.grey
+        : score >= 85
+            ? Colors.green
+            : score >= 70
+                ? Colors.orange
+                : Colors.redAccent;
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF174D3A), Color(0xFF5B9275)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 94,
+            height: 94,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: color, width: 7),
+            ),
+            child: Text(
+              displayScore,
+              style: TextStyle(
+                color: color,
+                fontSize: 29,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  HealthInsights.level(score),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  score == null
+                      ? '尚無足夠資料可以計算'
+                      : '100 分起算，依異常紀錄扣分',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '本次分析 $recordCount 筆紀錄',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _categoryCard(
+    String title,
+    String category,
+    IconData icon,
+    Color color,
+    List<Map<String, dynamic>> records,
+  ) {
+    final categoryRecords = records
+        .where((record) => HealthInsights.type(record) == category)
+        .toList();
+    final categoryScore = HealthInsights.score(
+      categoryRecords,
+      category: category,
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withValues(alpha: .18)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 7),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 3),
+          Text(
+            categoryScore == null ? '-- 分' : '$categoryScore 分',
+            style: TextStyle(color: color, fontWeight: FontWeight.bold),
+          ),
+          Text(
+            '${categoryRecords.length} 筆',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _deductionRow(String warning, int count, int totalPoints) {
+    final singlePenalty = HealthInsights.penalty(warning);
+    return ListTile(
+      leading: const CircleAvatar(
+        backgroundColor: Color(0xFFFFECEC),
+        child: Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+      ),
+      title: Text(warning, style: const TextStyle(fontWeight: FontWeight.bold)),
+      subtitle: Text('出現 $count 次・每次扣 $singlePenalty 分'),
+      trailing: Text(
+        '-$totalPoints',
+        style: const TextStyle(
+          color: Colors.redAccent,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Widget _messageCard(String message) {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: _lightGreen,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: _green, height: 1.5),
+      ),
+    );
+  }
+
+  Widget _error(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(message, textAlign: TextAlign.center),
       ),
     );
   }
