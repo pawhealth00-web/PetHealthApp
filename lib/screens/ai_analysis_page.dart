@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import 'health_insights.dart';
 
@@ -87,6 +90,12 @@ class HealthAnalysisPage extends StatelessWidget {
       children: [
         _scoreCard(score, recentRecords.length),
         const SizedBox(height: 16),
+        _GeminiHealthCard(
+          petName: petName,
+          score: score,
+          records: recentRecords,
+        ),
+        const SizedBox(height: 22),
         const Text(
           '最近 7 天資料來源',
           style: TextStyle(
@@ -354,6 +363,171 @@ class HealthAnalysisPage extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Text(message, textAlign: TextAlign.center),
+      ),
+    );
+  }
+}
+
+class _GeminiHealthCard extends StatefulWidget {
+  const _GeminiHealthCard({
+    required this.petName,
+    required this.score,
+    required this.records,
+  });
+
+  final String petName;
+  final int? score;
+  final List<Map<String, dynamic>> records;
+
+  @override
+  State<_GeminiHealthCard> createState() => _GeminiHealthCardState();
+}
+
+class _GeminiHealthCardState extends State<_GeminiHealthCard> {
+  static final _endpoint = Uri.parse(
+    'https://pethealth-backend.onrender.com/analyze-health',
+  );
+  bool _loading = false;
+  String? _analysis;
+  String? _advice;
+  String? _error;
+
+  Map<String, dynamic> _recordSummary(Map<String, dynamic> record) {
+    final category = HealthInsights.type(record);
+    final date = HealthInsights.date(record).toIso8601String().split('T').first;
+    final observations = <String>[];
+    void add(String label, Object? value) {
+      final text = value?.toString().trim() ?? '';
+      if (text.isNotEmpty && text != 'null') {
+        final full = '$label：$text';
+        observations.add(full.length > 120 ? full.substring(0, 120) : full);
+      }
+    }
+
+    if (category == 'diet') {
+      add('餐別', record['mealType']);
+      add('食慾', record['appetite']);
+      add('飲水', record['waterStatus']);
+      add('進食比例', record['finishedRatio']);
+      if (record['vomited'] == true) observations.add('有嘔吐');
+      if (record['changedFood'] == true) observations.add('有更換食品');
+    } else if (category == 'behavior') {
+      add('情緒', record['mood']);
+      add('活動量', record['activity_level']);
+      add('睡眠', record['sleep_status']);
+      add('食慾變化', record['appetite_change']);
+      add('異常行為', (record['abnormal_behaviors'] as List?)?.join('、'));
+    } else if (category == 'poop') {
+      add('形狀', record['shape']);
+      add('顏色', record['color']);
+      add('軟硬', record['consistency']);
+      add('次數', record['frequency']);
+    }
+    add('補充', record['note'] ?? record['notes']);
+    return {
+      'record_date': date,
+      'category': category,
+      'observations': observations.take(12).toList(),
+      'warnings': HealthInsights.warnings(record)
+          .take(12)
+          .map((warning) => warning.length > 60
+              ? warning.substring(0, 60) : warning)
+          .toList(),
+    };
+  }
+
+  Future<void> _analyze() async {
+    if (_loading || widget.records.isEmpty) return;
+    setState(() {
+      _loading = true;
+      _analysis = null;
+      _advice = null;
+      _error = null;
+    });
+    try {
+      final body = {
+        'pet_name': widget.petName,
+        'score': widget.score,
+        'records': widget.records.take(30).map(_recordSummary).toList(),
+      };
+      final response = await http.post(
+        _endpoint,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      ).timeout(const Duration(seconds: 100));
+      final result = jsonDecode(utf8.decode(response.bodyBytes));
+      if (response.statusCode != 200) {
+        final detail = result is Map ? result['detail']?.toString() : null;
+        throw Exception(detail ?? '伺服器回應 ${response.statusCode}');
+      }
+      if (result is! Map ||
+          result['analysis'] is! String ||
+          result['advice'] is! String ||
+          (result['analysis'] as String).trim().isEmpty ||
+          (result['advice'] as String).trim().isEmpty) {
+        throw const FormatException('回覆格式不完整');
+      }
+      if (!mounted) return;
+      setState(() {
+        _analysis = (result['analysis'] as String).trim();
+        _advice = (result['advice'] as String).trim();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final reason = error.toString().replaceFirst('Exception: ', '');
+      setState(() => _error = reason.length > 180
+          ? '${reason.substring(0, 180)}…'
+          : reason);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      color: const Color(0xFFEAF4EC),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Gemini 健康提醒',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
+                    color: Color(0xFF174D3A))),
+            const SizedBox(height: 8),
+            const Text('依最近七天的飲食、行為、排便紀錄整理趨勢。按下分析才會送出文字摘要。'),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _loading || widget.records.isEmpty ? null : _analyze,
+              icon: _loading
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.auto_awesome),
+              label: Text(_loading ? '分析中…' : '分析最近七天紀錄'),
+            ),
+            if (widget.records.isEmpty)
+              const Padding(padding: EdgeInsets.only(top: 10),
+                  child: Text('請先新增至少一筆健康紀錄。')),
+            if (_error != null)
+              Padding(padding: const EdgeInsets.only(top: 12),
+                  child: Text('分析失敗：$_error',
+                      style: const TextStyle(color: Colors.red))),
+            if (_analysis != null) ...[
+              const SizedBox(height: 14),
+              const Text('趨勢觀察', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(_analysis!),
+              const SizedBox(height: 10),
+              const Text('照護建議', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text(_advice!),
+            ],
+            const SizedBox(height: 10),
+            const Text('此為紀錄輔助整理，不是獸醫診斷。',
+                style: TextStyle(fontSize: 12, color: Colors.black54)),
+          ],
+        ),
       ),
     );
   }
