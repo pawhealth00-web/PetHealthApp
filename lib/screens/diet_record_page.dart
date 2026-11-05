@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'record_detail_page.dart';
+import 'record_presentation.dart';
 
 class DietRecordPage extends StatefulWidget {
   final String petId;
@@ -38,6 +41,87 @@ class _DietRecordPageState extends State<DietRecordPage> {
   bool _vomited = false;
   bool _isSaving = false;
   String? _aiAnalysis;
+  Map<String, dynamic>? _lastMeal;
+  bool _foodEdited = false;
+  bool _usingLastMeal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLastMeal();
+  }
+
+  Future<void> _loadLastMeal() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('health_records')
+          .where('petId', isEqualTo: widget.petId)
+          .where('recordType', isEqualTo: 'diet')
+          .get();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (!mounted || uid == null) return;
+      final records = snapshot.docs.where((doc) {
+        final data = doc.data();
+        return data['owner_uid'] == uid &&
+            ((data['brand'] ?? '').toString().trim().isNotEmpty ||
+                (data['foodName'] ?? data['foodType'] ?? '')
+                    .toString()
+                    .trim()
+                    .isNotEmpty);
+      }).toList()
+        ..sort((a, b) {
+          final aData = a.data();
+          final bData = b.data();
+          final aDate = aData['createdAt'] ?? aData['recordDate'];
+          final bDate = bData['createdAt'] ?? bData['recordDate'];
+          final aMs = aDate is Timestamp ? aDate.millisecondsSinceEpoch : 0;
+          final bMs = bDate is Timestamp ? bDate.millisecondsSinceEpoch : 0;
+          return bMs.compareTo(aMs);
+        });
+      if (records.isEmpty) return;
+      final last = records.first.data();
+      setState(() => _lastMeal = last);
+      if (!_foodEdited && _brandController.text.isEmpty &&
+          _foodNameController.text.isEmpty && _amountController.text.isEmpty) {
+        _useLastMeal();
+      }
+    } catch (_) {
+      // 查詢失敗時仍可手動輸入並儲存本次飲食。
+    }
+  }
+
+  void _useLastMeal() {
+    final last = _lastMeal;
+    if (last == null) return;
+    setState(() {
+      _usingLastMeal = true;
+      _foodEdited = true;
+      _brandController.text = (last['brand'] ?? '').toString();
+      _foodNameController.text =
+          (last['foodName'] ?? last['foodType'] ?? '').toString();
+      final amount = last['amount'];
+      _amountController.text = amount is num
+          ? (amount == amount.roundToDouble()
+              ? amount.toInt().toString()
+              : amount.toString())
+          : '';
+      final unit = (last['unit'] ?? '').toString();
+      _unit = const ['公克 (g)', '毫升 (ml)', '罐', '包', '份'].contains(unit)
+          ? unit
+          : '公克 (g)';
+    });
+  }
+
+  void _enterNewFood() {
+    setState(() {
+      _usingLastMeal = false;
+      _foodEdited = true;
+      _brandController.clear();
+      _foodNameController.clear();
+      _amountController.clear();
+      _unit = '公克 (g)';
+    });
+  }
 
   Future<void> _pickDate() async {
     final selected = await showDatePicker(
@@ -75,18 +159,11 @@ class _DietRecordPageState extends State<DietRecordPage> {
   }
 
   Future<void> _saveRecord() async {
-    if (_foodNameController.text.trim().isEmpty ||
-        _amountController.text.trim().isEmpty) {
+    final rawAmount = _amountController.text.trim();
+    final amount = rawAmount.isEmpty ? null : double.tryParse(rawAmount);
+    if (rawAmount.isNotEmpty && (amount == null || amount <= 0)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('請輸入食物名稱和份量')),
-      );
-      return;
-    }
-
-    final amount = double.tryParse(_amountController.text.trim());
-    if (amount == null || amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('份量請輸入大於 0 的數字')),
+        const SnackBar(content: Text('若填寫份量，請輸入大於 0 的數字')),
       );
       return;
     }
@@ -122,10 +199,22 @@ class _DietRecordPageState extends State<DietRecordPage> {
         'changedFood': _changedFood,
         'vomited': _vomited,
         'createdAt': FieldValue.serverTimestamp(),
+        'owner_uid': FirebaseAuth.instance.currentUser?.uid,
       });
 
       if (!mounted) return;
-      setState(() => _aiAnalysis = _makeLocalAnalysis());
+      setState(() {
+        _aiAnalysis = _makeLocalAnalysis();
+        if (_brandController.text.trim().isNotEmpty ||
+            _foodNameController.text.trim().isNotEmpty) {
+          _lastMeal = {
+            'brand': _brandController.text.trim(),
+            'foodName': _foodNameController.text.trim(),
+            'amount': amount,
+            'unit': _unit,
+          };
+        }
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('飲食紀錄儲存成功')),
       );
@@ -179,20 +268,24 @@ class _DietRecordPageState extends State<DietRecordPage> {
                     itemCount: docs.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (_, index) {
-                      final data = docs[index].data();
+                      final doc = docs[index];
+                      final data = doc.data();
                       final timestamp = (data['recordDate'] ?? data['createdAt']) as Timestamp?;
                       final date = timestamp?.toDate();
                       final dateText = date == null
                           ? '日期未記錄'
                           : '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
                       return ListTile(
+                        onTap: () => Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => RecordDetailPage(reference: doc.reference,
+                            petId: widget.petId))),
                         contentPadding: const EdgeInsets.symmetric(vertical: 6),
                         leading: const CircleAvatar(
                           backgroundColor: Color(0xFFEAF4EC),
                           child: Icon(Icons.restaurant, color: _green),
                         ),
-                        title: Text((data['foodName'] ?? data['foodType'] ?? '未命名食物').toString()),
-                        subtitle: Text('$dateText ・ ${data['amount'] ?? '-'} ${data['unit'] ?? ''}'),
+                        title: Text(RecordPresentation.title(data)),
+                        subtitle: Text('$dateText ・ ${RecordPresentation.subtitle(data)}'),
                       );
                     },
                   );
@@ -253,12 +346,42 @@ class _DietRecordPageState extends State<DietRecordPage> {
           ),
         ),
         const SizedBox(height: 28),
+        if (_lastMeal != null) ...[
+          _label('本次飼料與食品'),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('沿用上次'),
+                selected: _usingLastMeal,
+                onSelected: (_) => _useLastMeal(),
+              ),
+              ChoiceChip(
+                label: const Text('輸入新的'),
+                selected: !_usingLastMeal,
+                onSelected: (_) => _enterNewFood(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '上次：${(_lastMeal!['brand'] ?? '').toString().trim()} '
+            '${(_lastMeal!['foodName'] ?? _lastMeal!['foodType'] ?? '').toString().trim()}'
+            ' ・ ${_lastMeal!['amount'] ?? '未填份量'} '
+            '${_lastMeal!['amount'] == null ? '' : (_lastMeal!['unit'] ?? '公克 (g)')}',
+            style: const TextStyle(color: _green),
+          ),
+          const SizedBox(height: 24),
+        ],
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: _input('食物品牌', _brandController, '例如：皇家')),
+            Expanded(child: _input('食物品牌（選填）', _brandController, '例如：皇家',
+                onChanged: (_) => _foodEdited = true)),
             const SizedBox(width: 16),
-            Expanded(child: _input('食物名稱', _foodNameController, '例如：犬糧A')),
+            Expanded(child: _input('食物名稱（選填）', _foodNameController, '例如：犬糧A',
+                onChanged: (_) => _foodEdited = true)),
           ],
         ),
         const SizedBox(height: 24),
@@ -266,8 +389,9 @@ class _DietRecordPageState extends State<DietRecordPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: _input('份量', _amountController, '0',
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+              child: _input('本餐份量（選填）', _amountController, '例如：50',
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) => _foodEdited = true),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -417,13 +541,15 @@ class _DietRecordPageState extends State<DietRecordPage> {
   );
 
   Widget _input(String label, TextEditingController controller, String hint,
-      {TextInputType? keyboardType, int maxLines = 1}) {
+      {TextInputType? keyboardType, int maxLines = 1,
+      ValueChanged<String>? onChanged}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(label),
         TextField(
           controller: controller,
+          onChanged: onChanged,
           keyboardType: keyboardType,
           maxLines: maxLines,
           decoration: InputDecoration(
@@ -501,3 +627,4 @@ class _DietRecordPageState extends State<DietRecordPage> {
     borderRadius: BorderRadius.circular(28),
   );
 }
+

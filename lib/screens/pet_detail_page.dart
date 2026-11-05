@@ -1,11 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-
+import 'pet_insurance_page.dart';
 import 'ai_analysis_page.dart';
 import 'behavior_record_page.dart';
 import 'diet_record_page.dart';
 import 'poop_record_page.dart';
-import 'vaccine_record_page.dart';
+import 'medical_record_page.dart';
+import 'health_insights.dart';
+import 'record_detail_page.dart';
+import 'category_history_page.dart';
+import 'record_presentation.dart';
 
 class PetDetailPage extends StatefulWidget {
   final String petId;
@@ -78,95 +82,136 @@ class _PetDetailPageState extends State<PetDetailPage> {
           return const Center(child: CircularProgressIndicator(color: _green));
         }
 
-        final records = [...snapshot.data!.docs];
-        records.sort((a, b) => _recordDate(b.data()).compareTo(_recordDate(a.data())));
-        final score = _healthScore(records);
-        final dietCount = _countType(records, 'diet');
-        final behaviorCount = _countType(records, 'behavior');
-        final poopCount = _countType(records, 'poop');
-        final vaccineCount = _countType(records, 'vaccine');
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('pets')
+              .doc(widget.petId)
+              .collection('behavior_records')
+              .snapshots(),
+          builder: (context, behaviorSnapshot) {
+            if (behaviorSnapshot.hasError) {
+              return Center(child: Text('行為紀錄讀取失敗：${behaviorSnapshot.error}'));
+            }
+            if (!behaviorSnapshot.hasData) {
+              return const Center(child: CircularProgressIndicator(color: _green));
+            }
+            final records = [...snapshot.data!.docs, ...behaviorSnapshot.data!.docs];
+            records.sort((a, b) => _recordDate(b.data()).compareTo(_recordDate(a.data())));
+            final score = _healthScore(records);
+            final dietCount = _countType(records, 'diet');
+            final behaviorCount = _countType(records, 'behavior');
+            final poopCount = _countType(records, 'poop');
+            final medicalCount = records
+                .where((r) => ['vaccine', 'medical'].contains(HealthInsights.type(r.data())))
+                .length;
 
-        return RefreshIndicator(
-          color: _green,
-          onRefresh: () async => Future<void>.delayed(const Duration(milliseconds: 300)),
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
-            children: [
-              _buildTopButtons(),
-              const SizedBox(height: 16),
-              _buildScoreCard(score, records),
-              const SizedBox(height: 20),
-              const Text('健康項目', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                mainAxisSpacing: 10,
-                crossAxisSpacing: 10,
-                childAspectRatio: 1.55,
+            return RefreshIndicator(
+              color: _green,
+              onRefresh: () async => Future<void>.delayed(const Duration(milliseconds: 300)),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
                 children: [
-                  _metricCard('飲食', Icons.restaurant, Colors.orange, _categoryScore(records, 'diet'), dietCount),
-                  _metricCard('排便', Icons.pets, Colors.brown, _categoryScore(records, 'poop'), poopCount),
-                  _metricCard('行為', Icons.mood, Colors.blue, _categoryScore(records, 'behavior'), behaviorCount),
-                  _metricCard('疫苗', Icons.vaccines, Colors.pinkAccent, vaccineCount == 0 ? 0 : 100, vaccineCount),
+                  _buildTopButtons(),
+                  const SizedBox(height: 16),
+                  _buildScoreCard(score, records),
+                  const SizedBox(height: 20),
+                  const Text('健康項目', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 10,
+                    crossAxisSpacing: 10,
+                    childAspectRatio: 1.55,
+                    children: [
+                      _metricCard('飲食', 'diet', Icons.restaurant, Colors.orange, _categoryScore(records, 'diet'), dietCount),
+                      _metricCard('排便', 'poop', Icons.pets, Colors.brown, _categoryScore(records, 'poop'), poopCount),
+                      _metricCard('行為', 'behavior', Icons.mood, Colors.blue, _categoryScore(records, 'behavior'), behaviorCount),
+                      _metricCard('醫療', 'medical', Icons.medical_services, Colors.pinkAccent, 0, medicalCount, showScore: false),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('最近紀錄', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text('顯示最近 ${records.length < 5 ? records.length : 5} 筆 · 共 ${records.length} 筆', style: const TextStyle(color: Colors.grey)),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (records.isEmpty)
+                    _buildEmptyState()
+                  else
+                    ...records.take(5).map((record) => _buildRecordCard(record)),
                 ],
               ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('最近紀錄', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                  Text('共 ${records.length} 筆', style: const TextStyle(color: Colors.grey)),
-                ],
-              ),
-              const SizedBox(height: 10),
-              if (records.isEmpty)
-                _buildEmptyState()
-              else
-                ...records.take(20).map((record) => _buildRecordCard(record.data())),
-            ],
-          ),
+            );
+          },
         );
       },
     );
   }
 
   Widget _buildTopButtons() {
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => VaccineRecordPage(petId: widget.petId, petName: widget.petName),
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => MedicalRecordPage(petId: widget.petId, petName: widget.petName),
+                  ),
+                ),
+                icon: const Icon(Icons.medical_services),
+                label: const Text('醫療紀錄'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.pinkAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                ),
               ),
             ),
-            icon: const Icon(Icons.vaccines),
-            label: const Text('疫苗紀錄'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.pinkAccent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => HealthAnalysisPage(petId: widget.petId, petName: widget.petName),
+                  ),
+                ),
+                icon: const Icon(Icons.auto_awesome),
+                label: const Text('AI 健康分析'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
           child: ElevatedButton.icon(
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => HealthAnalysisPage(petId: widget.petId, petName: widget.petName),
+                builder: (_) => PetInsurancePage(petId: widget.petId),
               ),
             ),
-            icon: const Icon(Icons.auto_awesome),
-            label: const Text('AI 健康分析'),
+            icon: const Icon(Icons.shield),
+            label: const Text('寵物保險與理賠（健康存摺聯動）'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: _green,
+              backgroundColor: Colors.teal,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 13),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -202,6 +247,7 @@ class _PetDetailPageState extends State<PetDetailPage> {
             height: 96,
             child: Stack(
               alignment: Alignment.center,
+              fit: StackFit.expand,
               children: [
                 CircularProgressIndicator(
                   value: score / 100,
@@ -212,8 +258,11 @@ class _PetDetailPageState extends State<PetDetailPage> {
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('$score', style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
-                    const Text('健康分數', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                    Text(
+                      HealthInsights.score(records.map((r) => r.data())) == null ? '--' : '$score',
+                      style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                    ),
+                    const Text('近七天觀察分數', style: TextStyle(color: Colors.white70, fontSize: 10)),
                   ],
                 ),
               ],
@@ -237,42 +286,50 @@ class _PetDetailPageState extends State<PetDetailPage> {
     );
   }
 
-  Widget _metricCard(String title, IconData icon, Color color, int score, int count) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: const [BoxShadow(color: Color(0x10000000), blurRadius: 8)],
+  Widget _metricCard(String title, String category, IconData icon, Color color, int score, int count, {bool showScore = true}) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => CategoryHistoryPage(petId: widget.petId, category: category)),
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(
-                  count == 0 ? '尚無紀錄' : '$score 分・$count 筆',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const [BoxShadow(color: Color(0x10000000), blurRadius: 8)],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: color.withOpacity(0.12), shape: BoxShape.circle),
+              child: Icon(icon, color: color),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    count == 0 ? '尚無紀錄' : showScore ? '$score 分・$count 筆' : '$count 筆',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildRecordCard(Map<String, dynamic> data) {
-    final type = (data['recordType'] ?? '').toString();
+  Widget _buildRecordCard(QueryDocumentSnapshot<Map<String, dynamic>> record) {
+    final data = record.data();
+    final type = HealthInsights.type(data);
     final config = _typeConfig(type);
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -285,9 +342,13 @@ class _PetDetailPageState extends State<PetDetailPage> {
           backgroundColor: config.color.withOpacity(0.12),
           child: Icon(config.icon, color: config.color),
         ),
-        title: Text(_recordTitle(data, config.label), style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(_recordSubtitle(data), maxLines: 2, overflow: TextOverflow.ellipsis),
+        title: Text(RecordPresentation.title(data), style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(RecordPresentation.subtitle(data), maxLines: 2, overflow: TextOverflow.ellipsis),
         trailing: Text(_formatDate(_recordDate(data)), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => RecordDetailPage(reference: record.reference, petId: widget.petId)),
+        ),
       ),
     );
   }
@@ -302,56 +363,30 @@ class _PetDetailPageState extends State<PetDetailPage> {
           SizedBox(height: 10),
           Text('尚無健康紀錄', style: TextStyle(fontWeight: FontWeight.bold)),
           SizedBox(height: 5),
-          Text('新增飲食、行為、排便或疫苗紀錄後會顯示在這裡', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+          Text('新增飲食、行為、排便或醫療紀錄後會顯示在這裡', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
         ],
       ),
     );
   }
 
   int _countType(List<QueryDocumentSnapshot<Map<String, dynamic>>> records, String type) {
-    return records.where((record) => record.data()['recordType'] == type).length;
+    return records.where((record) => HealthInsights.type(record.data()) == type).length;
   }
 
   int _categoryScore(List<QueryDocumentSnapshot<Map<String, dynamic>>> records, String type) {
-    final category = records.where((record) => record.data()['recordType'] == type).take(7).toList();
-    if (category.isEmpty) return 0;
-    var score = 100;
-    for (final record in category) {
-      final text = record.data().values.join(' ').toLowerCase();
-      if (RegExp('嘔吐|腹瀉|拉肚子|帶血|食慾不佳|食慾下降|精神差|異常').hasMatch(text)) {
-        score -= 12;
-      }
-    }
-    return score.clamp(40, 100).toInt();
+    return HealthInsights.score(records.map((record) => record.data()), category: type) ?? 0;
   }
 
   int _healthScore(List<QueryDocumentSnapshot<Map<String, dynamic>>> records) {
-    if (records.isEmpty) return 0;
-    final scores = ['diet', 'poop', 'behavior']
-        .map((type) => _categoryScore(records, type))
-        .where((score) => score > 0)
-        .toList();
-    if (scores.isEmpty) return 100;
-    return (scores.reduce((a, b) => a + b) / scores.length).round();
+    return HealthInsights.score(records.map((record) => record.data())) ?? 0;
   }
 
   String _healthSummary(List<QueryDocumentSnapshot<Map<String, dynamic>>> records) {
-    if (records.isEmpty) return '開始建立健康紀錄後，這裡會顯示健康摘要。';
-    final text = records.take(7).map((record) => record.data().values.join(' ')).join(' ');
-    if (RegExp('嘔吐|帶血|腹瀉|拉肚子').hasMatch(text)) {
-      return '近期有需要留意的症狀，若持續發生，建議諮詢獸醫。';
-    }
-    if (RegExp('食慾不佳|食慾下降|精神差|喝水量偏少').hasMatch(text)) {
-      return '近期有輕微異常，請持續觀察食慾、飲水與精神狀態。';
-    }
-    return '近期整體狀況穩定，請繼續保持每日健康紀錄。';
+    return HealthInsights.summary(records.map((record) => record.data()));
   }
 
   DateTime _recordDate(Map<String, dynamic> data) {
-    final value = data['recordDate'] ?? data['createdAt'] ?? data['date'];
-    if (value is Timestamp) return value.toDate();
-    if (value is DateTime) return value;
-    return DateTime.tryParse(value?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return HealthInsights.date(data);
   }
 
   String _formatDate(DateTime date) {
@@ -372,33 +407,6 @@ class _PetDetailPageState extends State<PetDetailPage> {
       default:
         return const _RecordTypeConfig('健康', Icons.health_and_safety, _green);
     }
-  }
-
-  String _recordTitle(Map<String, dynamic> data, String fallback) {
-    return (data['title'] ??
-        data['vaccineName'] ??
-        data['foodName'] ??
-        data['foodType'] ??
-        data['shape'] ??
-        data['behavior'] ??
-        data['status'] ??
-        '$fallback紀錄')
-        .toString();
-  }
-
-  String _recordSubtitle(Map<String, dynamic> data) {
-    final note = (data['note'] ?? '').toString().trim();
-    if (note.isNotEmpty) return note;
-    if (data['recordType'] == 'diet') {
-      return '份量：${data['amount'] ?? '--'} ${data['unit'] ?? ''}';
-    }
-    if (data['recordType'] == 'poop') {
-      return '顏色：${data['color'] ?? '--'}';
-    }
-    if (data['recordType'] == 'behavior') {
-      return (data['energy'] ?? data['mood'] ?? '已完成行為紀錄').toString();
-    }
-    return '無補充說明';
   }
 }
 

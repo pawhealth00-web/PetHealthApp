@@ -39,6 +39,11 @@ class _CreatePetProfilePageState extends State<CreatePetProfilePage> {
     if (pickedFile == null) return;
     final bytes = await pickedFile.readAsBytes();
     if (!mounted) return;
+    if (bytes.lengthInBytes > 650 * 1024) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('照片過大，請選擇較小的圖片')));
+      return;
+    }
     setState(() => _imageBytes = bytes);
   }
 

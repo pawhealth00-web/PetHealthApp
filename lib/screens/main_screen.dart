@@ -9,6 +9,9 @@ import 'create_pet_profile_page.dart';
 import 'edit_pet_profile_page.dart';
 import 'login_page.dart';
 import 'pet_detail_page.dart';
+import 'history_record_page.dart';
+import 'user_profile_page.dart';
+import 'ai_analysis_page.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -28,6 +31,7 @@ class _MainScreenState extends State<MainScreen> {
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _petsStream;
   int _selectedPetIndex = 0;
   String? _selectedPetId;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _latestPets = [];
 
   @override
   void initState() {
@@ -99,6 +103,19 @@ class _MainScreenState extends State<MainScreen> {
         builder: (_) => PetDetailPage(petId: petId, petName: petName),
       ),
     );
+  }
+
+  void _openHistory() => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => const HistoryRecordPage()));
+
+  void _openProfile() => Navigator.push(context,
+      MaterialPageRoute(builder: (_) => const UserProfilePage()));
+
+  void _openSelectedAnalysis(List<QueryDocumentSnapshot<Map<String, dynamic>>> pets) {
+    if (pets.isEmpty) return;
+    final pet = pets[_selectedPetIndex];
+    Navigator.push(context, MaterialPageRoute(builder: (_) => HealthAnalysisPage(
+      petId: pet.id, petName: pet.data()['name']?.toString() ?? '寵物')));
   }
 
   void _openEditPetPage({
@@ -374,20 +391,37 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         actions: [
-          PopupMenuButton<String>(
-            tooltip: '設定',
-            icon: const Icon(Icons.settings_outlined),
-            onSelected: (value) {
-              if (value == 'logout') _logout();
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'logout',
-                child: Row(children: [Icon(Icons.logout, color: primaryColor), SizedBox(width: 12), Text('登出')]),
-              ),
-            ],
-          ),
+          IconButton(tooltip: '使用者資料', onPressed: _openProfile,
+            icon: const Icon(Icons.account_circle_outlined)),
+          IconButton(tooltip: '登出', onPressed: _logout,
+            icon: const Icon(Icons.logout)),
           const SizedBox(width: 6),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: 0,
+        onDestinationSelected: (index) {
+          if (index == 1) {
+            final pets = _latestPets;
+            if (pets.isNotEmpty) {
+              final pet = pets[_selectedPetIndex.clamp(0, pets.length - 1).toInt()];
+              _openPetDetail(petId: pet.id,
+                petName: pet.data()['name']?.toString() ?? '寵物');
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('請先新增寵物')));
+            }
+          } else if (index == 2) {
+            _openHistory();
+          } else if (index == 3) {
+            _openProfile();
+          }
+        },
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.home_outlined), label: '首頁'),
+          NavigationDestination(icon: Icon(Icons.edit_note), label: '紀錄'),
+          NavigationDestination(icon: Icon(Icons.history), label: '健康存摺'),
+          NavigationDestination(icon: Icon(Icons.person_outline), label: '我的'),
         ],
       ),
       body: userId == null
@@ -407,6 +441,7 @@ class _MainScreenState extends State<MainScreen> {
             );
           }
           final pets = snapshot.data?.docs ?? [];
+          _latestPets = pets;
           if (pets.isNotEmpty) {
             final rememberedIndex = _selectedPetId == null
                 ? -1
@@ -543,7 +578,7 @@ class _MainScreenState extends State<MainScreen> {
                       title: '最近七天紀錄',
                       subtitle: '查看毛孩近期的健康變化',
                       color: secondaryColor,
-                      onTap: openSelectedPet,
+                      onTap: _openHistory,
                     ),
                     const SizedBox(height: 12),
                     _featureCard(
@@ -551,7 +586,7 @@ class _MainScreenState extends State<MainScreen> {
                       title: 'AI 健康分析',
                       subtitle: '根據近期紀錄提供健康提醒',
                       color: primaryColor,
-                      onTap: openSelectedPet,
+                      onTap: () => _openSelectedAnalysis(pets),
                     ),
                   ],
                 ],

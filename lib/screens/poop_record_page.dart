@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'record_detail_page.dart';
 
 class PoopRecordPage extends StatefulWidget {
   final String petId;
@@ -26,7 +29,6 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
   static const Color _border = Color(0xFFE1EBE6);
   static const Color _hint = Color(0xFFA5B8B0);
 
-  final _countController = TextEditingController();
   final _noteController = TextEditingController();
   final _picker = ImagePicker();
 
@@ -38,6 +40,10 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
   Uint8List? _photoBytes;
   String? _photoName;
   bool _isSaving = false;
+  bool _photoUploaded = false;
+  DocumentReference<Map<String, dynamic>>? _savedRecord;
+  String? _saveStatus;
+  double? _uploadProgress;
   String? _aiAnalysis;
 
   String get _dateText =>
@@ -62,11 +68,18 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
         maxHeight: 1280,
       );
       if (image == null) return;
-      final bytes = await image.readAsBytes();
+      final bytes = await image.readAsBytes().timeout(const Duration(seconds: 15));
       if (!mounted) return;
+      if (bytes.lengthInBytes > 2 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('照片超過 2 MB，請選擇較小的照片')));
+        return;
+      }
       setState(() {
         _photoBytes = bytes;
         _photoName = image.name;
+        _photoUploaded = false;
+        _uploadProgress = null;
       });
     } catch (e) {
       if (mounted) {
@@ -86,8 +99,20 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
     final metadata = SettableMetadata(
       contentType: extension == 'png' ? 'image/png' : 'image/jpeg',
     );
-    await ref.putData(_photoBytes!, metadata);
-    return ref.getDownloadURL();
+    final task = ref.putData(_photoBytes!, metadata);
+    final subscription = task.snapshotEvents.listen((snapshot) {
+      if (!mounted || snapshot.totalBytes == 0) return;
+      setState(() => _uploadProgress = snapshot.bytesTransferred / snapshot.totalBytes);
+    });
+    try {
+      await task.timeout(const Duration(seconds: 25));
+      return await ref.getDownloadURL().timeout(const Duration(seconds: 10));
+    } catch (_) {
+      unawaited(task.cancel().then((_) {}).catchError((Object _) {}));
+      rethrow;
+    } finally {
+      await subscription.cancel();
+    }
   }
 
   String _makeLocalAnalysis() {
@@ -109,18 +134,14 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
   }
 
   Future<void> _saveRecord() async {
-    final count = int.tryParse(_countController.text.trim());
-    if (count == null || count <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('請輸入正確的排便次數')),
-      );
-      return;
-    }
-
-    setState(() => _isSaving = true);
+    setState(() {
+      _isSaving = true;
+      _saveStatus = _savedRecord == null ? '正在儲存紀錄…' : '正在重試上傳照片…';
+      _uploadProgress = null;
+    });
     try {
-      final photoUrl = await _uploadPhoto();
-      await FirebaseFirestore.instance.collection('health_records').add({
+      if (_savedRecord == null) {
+        final record = await FirebaseFirestore.instance.collection('health_records').add({
         'petId': widget.petId,
         'petName': widget.petName,
         'recordType': 'poop',
@@ -130,34 +151,124 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
         'note': _noteController.text.trim(),
         // 新版欄位。
         'recordDate': Timestamp.fromDate(_recordDate),
-        'count': count,
         'frequency': _frequency,
         'consistency': _consistency,
-        'photoUrl': photoUrl,
         'createdAt': FieldValue.serverTimestamp(),
-      });
+        'owner_uid': FirebaseAuth.instance.currentUser?.uid,
+        });
+        _savedRecord = record;
+      }
 
       if (!mounted) return;
       setState(() => _aiAnalysis = _makeLocalAnalysis());
+      if (_photoBytes != null && !_photoUploaded) {
+        setState(() => _saveStatus = '紀錄已儲存，照片上傳中…');
+        try {
+          final photoUrl = await _uploadPhoto();
+          if (photoUrl != null) await _savedRecord!.update({'photoUrl': photoUrl});
+          _photoUploaded = true;
+        } catch (error) {
+          if (!mounted) return;
+          final reason = error is TimeoutException ? '連線逾時' :
+              error is FirebaseException ? (error.message ?? error.code) : '$error';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text('文字紀錄已儲存，照片未上傳（$reason）。請檢查網路或 Firebase Storage 權限，再按「重試照片上傳」。'),
+          ));
+          return;
+        }
+      }
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('排便紀錄儲存成功')),
+        SnackBar(content: Text(_photoBytes == null ? '排便紀錄儲存成功' : '排便紀錄與照片儲存成功')),
       );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('儲存失敗：$e')),
+          SnackBar(content: Text(_savedRecord == null ? '儲存失敗：$e' : '文字紀錄已儲存，但照片連結更新失敗：$e')),
         );
       }
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) setState(() { _isSaving = false; _saveStatus = null; });
     }
   }
 
   @override
   void dispose() {
-    _countController.dispose();
     _noteController.dispose();
     super.dispose();
+  }
+
+  void _showHistory() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.sizeOf(sheetContext).height * .68,
+        child: Column(children: [
+          const Text('排便紀錄歷史',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: _green)),
+          const SizedBox(height: 12),
+          Expanded(child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance.collection('health_records')
+                .where('petId', isEqualTo: widget.petId)
+                .where('recordType', isEqualTo: 'poop').snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) return const Center(child: Text('讀取紀錄失敗'));
+              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              final docs = snapshot.data!.docs.toList()..sort((a, b) {
+                final aTime = (a.data()['recordDate'] ?? a.data()['createdAt']) as Timestamp?;
+                final bTime = (b.data()['recordDate'] ?? b.data()['createdAt']) as Timestamp?;
+                return (bTime?.millisecondsSinceEpoch ?? 0)
+                    .compareTo(aTime?.millisecondsSinceEpoch ?? 0);
+              });
+              if (docs.isEmpty) return const Center(child: Text('目前沒有排便紀錄'));
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                itemCount: docs.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final doc = docs[index];
+                  final data = doc.data();
+                  final timestamp = (data['recordDate'] ?? data['createdAt']) as Timestamp?;
+                  final date = timestamp?.toDate();
+                  final dateText = date == null ? '日期未記錄' :
+                      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+                  return ListTile(
+                    onTap: () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => RecordDetailPage(reference: doc.reference,
+                          petId: widget.petId))),
+                    leading: const CircleAvatar(backgroundColor: _lightGreen,
+                        child: Icon(Icons.pets, color: _green)),
+                    title: Text(dateText),
+                    subtitle: Text('${data['frequency'] ?? '未填頻率'} ・ ${data['shape'] ?? '未填形狀'} ・ ${data['color'] ?? '未填顏色'}'),
+                    trailing: const Icon(Icons.chevron_right),
+                  );
+                },
+              );
+            },
+          )),
+        ]),
+      ),
+    );
+  }
+
+  void _startNewRecord() {
+    _noteController.clear();
+    setState(() {
+      _recordDate = DateTime.now();
+      _frequency = '每日一次';
+      _shape = '成條';
+      _color = '深褐色';
+      _consistency = '適中';
+      _photoBytes = null;
+      _photoName = null;
+      _photoUploaded = false;
+      _uploadProgress = null;
+      _savedRecord = null;
+      _aiAnalysis = null;
+    });
   }
 
   @override
@@ -165,16 +276,20 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
       children: [
-        const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        Row(
           children: [
-            Text(
-              '排便紀錄',
+            const Expanded(child: Text(
+              '排便紀錄', textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.w800,
                 color: _green,
               ),
+            )),
+            IconButton(
+              tooltip: '歷史紀錄',
+              onPressed: _showHistory,
+              icon: const Icon(Icons.history, color: _green, size: 30),
             ),
           ],
         ),
@@ -183,26 +298,11 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
         const SizedBox(height: 16),
         _dateField(),
         const SizedBox(height: 24),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: _textInput(
-                controller: _countController,
-                hint: '例如：1',
-                keyboardType: TextInputType.number,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _dropDown(
-                label: '排便頻率',
-                value: _frequency,
-                items: const ['每日多次', '每日一次', '兩日一次', '三日以上一次'],
-                onChanged: (value) => setState(() => _frequency = value!),
-              ),
-            ),
-          ],
+        _dropDown(
+          label: '排便頻率',
+          value: _frequency,
+          items: const ['每日多次', '每日一次', '兩日一次', '三日以上一次'],
+          onChanged: (value) => setState(() => _frequency = value!),
         ),
         const SizedBox(height: 34),
         _sectionTitle(Icons.visibility_rounded, '糞便特徵'),
@@ -242,10 +342,17 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
           _analysisCard(),
         ],
         const SizedBox(height: 34),
+        if (_saveStatus != null) ...[
+          Text(_saveStatus!, textAlign: TextAlign.center,
+              style: const TextStyle(color: _green)),
+          if (_uploadProgress != null) LinearProgressIndicator(value: _uploadProgress),
+          const SizedBox(height: 12),
+        ],
         SizedBox(
           height: 62,
           child: ElevatedButton(
-            onPressed: _isSaving ? null : _saveRecord,
+            onPressed: _isSaving || (_savedRecord != null &&
+                (_photoBytes == null || _photoUploaded)) ? null : _saveRecord,
             style: ElevatedButton.styleFrom(
               backgroundColor: _buttonGreen,
               disabledBackgroundColor: _buttonGreen.withOpacity(.55),
@@ -264,12 +371,21 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
                 strokeWidth: 3,
               ),
             )
-                : const Text(
-              '儲存紀錄',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                : Text(
+              _savedRecord == null ? '儲存紀錄' :
+                  _photoUploaded || _photoBytes == null ? '已儲存' : '重試照片上傳',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
             ),
           ),
         ),
+        if (_savedRecord != null) ...[
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: _isSaving ? null : _startNewRecord,
+            icon: const Icon(Icons.add),
+            label: const Text('新增下一筆紀錄'),
+          ),
+        ],
       ],
     );
   }

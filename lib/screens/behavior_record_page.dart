@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'health_insights.dart';
+import 'record_detail_page.dart';
 
 class BehaviorRecordPage extends StatefulWidget {
   const BehaviorRecordPage({
@@ -37,6 +39,7 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
   String _appetiteChange = '正常';
   final Set<String> _abnormalBehaviors = {'無異常'};
   bool _saving = false;
+  String? _reminder;
 
   static const _moods = ['平靜', '興奮', '焦慮', '疲倦', '警覺'];
   static const _sleepOptions = ['良好', '睡眠增加', '睡眠減少', '容易驚醒', '日夜顛倒'];
@@ -123,6 +126,12 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
       }, SetOptions(merge: true));
 
       if (!mounted) return;
+      setState(() => _reminder = HealthInsights.reminder({
+        'recordType': 'behavior', 'mood': _mood,
+        'activity_level': _activityLevel.round(),
+        'sleep_status': _sleepStatus, 'appetite_change': _appetiteChange,
+        'abnormal_behaviors': _abnormalBehaviors.toList(),
+      }));
       _showMessage('行為紀錄已儲存');
     } on FirebaseException catch (error) {
       if (mounted) _showMessage('儲存失敗：${error.message ?? error.code}');
@@ -196,12 +205,16 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
                     itemCount: records.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, index) {
-                      final data = records[index].data();
+                      final record = records[index];
+                      final data = record.data();
                       final behaviors = (data['abnormal_behaviors'] as List?)
                               ?.map((value) => value.toString())
                               .join('、') ??
                           '無異常';
                       return ListTile(
+                        onTap: () => Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => RecordDetailPage(reference: record.reference,
+                            petId: widget.petId))),
                         contentPadding: const EdgeInsets.symmetric(vertical: 6),
                         leading: const CircleAvatar(
                           backgroundColor: _lightGreen,
@@ -426,6 +439,11 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                  ),
+                  if (_reminder != null) Padding(
+                    padding: const EdgeInsets.only(top: 18),
+                    child: Card(child: Padding(padding: const EdgeInsets.all(16),
+                      child: Text('健康提醒：$_reminder'))),
                   ),
                 ],
               ),
