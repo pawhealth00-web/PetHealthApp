@@ -31,6 +31,8 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
   static const _red = Color(0xFFD93645);
 
   final _notesController = TextEditingController();
+  final _scrollController = ScrollController();
+  int _formVersion = 0;
 
   DateTime _recordDate = DateTime.now();
   String _mood = '平靜';
@@ -56,6 +58,7 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -126,13 +129,28 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
       }, SetOptions(merge: true));
 
       if (!mounted) return;
-      setState(() => _reminder = HealthInsights.reminder({
+      final reminder = HealthInsights.reminder({
         'recordType': 'behavior', 'mood': _mood,
         'activity_level': _activityLevel.round(),
         'sleep_status': _sleepStatus, 'appetite_change': _appetiteChange,
         'abnormal_behaviors': _abnormalBehaviors.toList(),
-      }));
-      _showMessage('行為紀錄已儲存');
+      });
+      _notesController.clear();
+      setState(() {
+        _recordDate = DateTime.now();
+        _mood = '平靜';
+        _activityLevel = 3;
+        _sleepStatus = '良好';
+        _appetiteChange = '正常';
+        _abnormalBehaviors..clear()..add('無異常');
+        _reminder = null;
+        _formVersion++;
+      });
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(0, duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOut);
+      }
+      _showMessage('行為紀錄已儲存。$reminder');
     } on FirebaseException catch (error) {
       if (mounted) _showMessage('儲存失敗：${error.message ?? error.code}');
     } catch (error) {
@@ -225,8 +243,9 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         subtitle: Text(
-                          '${data['mood'] ?? '-'}・活動量 ${data['activity_level'] ?? '-'}\n$behaviors',
+                          '${data['mood'] ?? '-'}・活動量 ${data['activity_level'] ?? '-'}\n$behaviors・點開可修改',
                         ),
+                        trailing: const Icon(Icons.edit_outlined),
                         isThreeLine: true,
                       );
                     },
@@ -268,6 +287,7 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          controller: _scrollController,
           padding: const EdgeInsets.fromLTRB(20, 26, 20, 36),
           child: Center(
             child: ConstrainedBox(
@@ -346,6 +366,7 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
                         const _SectionTitle('睡眠狀況'),
                         const SizedBox(height: 18),
                         _StyledDropdown(
+                          key: ValueKey('sleep$_formVersion'),
                           value: _sleepStatus,
                           items: _sleepOptions,
                           onChanged: (value) =>
@@ -355,6 +376,7 @@ class _BehaviorRecordPageState extends State<BehaviorRecordPage> {
                         const _SectionTitle('食慾變化'),
                         const SizedBox(height: 18),
                         _StyledDropdown(
+                          key: ValueKey('appetite$_formVersion'),
                           value: _appetiteChange,
                           items: _appetiteOptions,
                           onChanged: (value) =>
@@ -665,6 +687,7 @@ class _ChoiceButton extends StatelessWidget {
 
 class _StyledDropdown extends StatelessWidget {
   const _StyledDropdown({
+    super.key,
     required this.value,
     required this.items,
     required this.onChanged,
@@ -708,3 +731,4 @@ class _StyledDropdown extends StatelessWidget {
     );
   }
 }
+

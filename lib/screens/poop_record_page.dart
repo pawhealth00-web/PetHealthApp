@@ -30,6 +30,7 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
   static const Color _hint = Color(0xFFA5B8B0);
 
   final _noteController = TextEditingController();
+  final _scrollController = ScrollController();
   final _picker = ImagePicker();
 
   DateTime _recordDate = DateTime.now();
@@ -179,9 +180,12 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
         }
       }
       if (!mounted) return;
+      final reminder = _makeLocalAnalysis();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_photoBytes == null ? '排便紀錄儲存成功' : '排便紀錄與照片儲存成功')),
+        SnackBar(content: Text('排便紀錄已儲存。$reminder'),
+            duration: const Duration(seconds: 6)),
       );
+      _startNewRecord();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -195,6 +199,7 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _noteController.dispose();
     super.dispose();
   }
@@ -243,7 +248,7 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
                         child: Icon(Icons.pets, color: _green)),
                     title: Text(dateText),
                     subtitle: Text('${data['frequency'] ?? '未填頻率'} ・ ${data['shape'] ?? '未填形狀'} ・ ${data['color'] ?? '未填顏色'}'),
-                    trailing: const Icon(Icons.chevron_right),
+                    trailing: const Icon(Icons.edit_outlined),
                   );
                 },
               );
@@ -269,11 +274,16 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
       _savedRecord = null;
       _aiAnalysis = null;
     });
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(0, duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return ListView(
+      controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 40),
       children: [
         Row(
@@ -383,7 +393,7 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
           TextButton.icon(
             onPressed: _isSaving ? null : _startNewRecord,
             icon: const Icon(Icons.add),
-            label: const Text('新增下一筆紀錄'),
+            label: const Text('略過照片，接著新增下一筆'),
           ),
         ],
       ],
@@ -638,3 +648,4 @@ class _PoopRecordPageState extends State<PoopRecordPage> {
     );
   }
 }
+

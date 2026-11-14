@@ -1,6 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'health_insights.dart';
 import 'record_detail_page.dart';
@@ -114,10 +118,22 @@ class _MedicalRecordPageState extends State<MedicalRecordPage> {
               final visits = medical.where((doc) =>
                   HealthInsights.type(doc.data()) == 'medical').toList();
               return ListView(padding: const EdgeInsets.all(16), children: [
-                Text('依寵物種類顯示：${species.isEmpty ? '種類未設定' : species}',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                const Text('基本醫療狀態', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                const Text('新增紀錄', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(child: FilledButton.icon(
+                    onPressed: () => _addRecord(), icon: const Icon(Icons.add),
+                    label: const Text('看診／醫療'),
+                    style: FilledButton.styleFrom(backgroundColor: _green))),
+                  const SizedBox(width: 10),
+                  Expanded(child: OutlinedButton.icon(
+                    onPressed: () => _addRecord(vaccine: true, vaccineOptions: suggested),
+                    icon: const Icon(Icons.vaccines), label: const Text('疫苗接種'))),
+                ]),
+                const SizedBox(height: 14),
+                Card(child: Column(children: [
+                  const ListTile(title: Text('基本狀態'),
+                    subtitle: Text('結紮與晶片可隨時更新；結紮紀錄也會同步狀態')),
                 SwitchListTile(
                   title: const Text('已結紮'),
                   subtitle: Text('目前：${pet['neutered'] ?? '未知'} · 由飼主自行更新'),
@@ -130,19 +146,18 @@ class _MedicalRecordPageState extends State<MedicalRecordPage> {
                   value: pet['microchipped'] == true,
                   onChanged: _setChip,
                 ),
+                ])),
                 const SizedBox(height: 14),
-                const Text('接種表依已儲存紀錄標示；「未記錄」不代表尚未施打。劑次和下次接種日期請依獸醫及疫苗手冊確認。'),
-                const SizedBox(height: 16),
-                const Text('疫苗接種表', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-                Card(child: ListTile(
-                  leading: const Icon(Icons.add_circle_outline, color: _green),
-                  title: const Text('新增疫苗接種'),
-                  subtitle: const Text('從選項挑選；找不到時選「其他疫苗，自行輸入」'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _addRecord(vaccine: true, vaccineOptions: suggested),
-                )),
+                Card(child: ExpansionTile(
+                  initiallyExpanded: true,
+                  title: const Text('疫苗接種表', style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('${species.isEmpty ? '未設定種類' : species} · 已記錄 ${vaccines.length} 筆'),
+                  childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+                  children: [
+                const Padding(padding: EdgeInsets.all(12),
+                  child: Text('勾選依已存紀錄顯示；未記錄不代表未施打。接種時程請依獸醫與疫苗手冊確認。')),
                 if (suggested.isEmpty) const Card(child: ListTile(
-                  title: Text('此種類沒有預設疫苗表'), subtitle: Text('可使用上方入口自行輸入疫苗名稱'))),
+                  title: Text('沒有預設接種表'), subtitle: Text('仍可在上方自行輸入疫苗名稱'))),
                 for (final item in suggested)
                   Builder(builder: (context) {
                     final entries = vaccines.where((doc) =>
@@ -181,19 +196,16 @@ class _MedicalRecordPageState extends State<MedicalRecordPage> {
                       ]),
                     ));
                   }),
-                const SizedBox(height: 16),
-                const Text('疫苗接種歷史',
-                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-                if (vaccines.isEmpty) const ListTile(title: Text('尚無疫苗接種紀錄')),
-                for (final doc in vaccines)
-                  _historyTile(doc, Icons.vaccines),
-                const SizedBox(height: 22),
-                const Text('其他看診與醫療紀錄',
-                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                FilledButton.icon(onPressed: () => _addRecord(),
-                  icon: const Icon(Icons.add), label: const Text('新增看診／醫療紀錄'),
-                  style: FilledButton.styleFrom(backgroundColor: _green)),
+                ])),
+                Card(child: ExpansionTile(
+                  title: Text('疫苗歷史（${vaccines.length} 筆）'),
+                  children: [
+                    if (vaccines.isEmpty) const ListTile(title: Text('尚無接種紀錄')),
+                    for (final doc in vaccines) _historyTile(doc, Icons.vaccines),
+                  ])),
+                const SizedBox(height: 14),
+                const Text('看診與其他醫療紀錄',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 if (visits.isEmpty) const ListTile(title: Text('尚無其他醫療紀錄')),
                 for (final doc in visits)
                   _historyTile(doc, Icons.medical_services),
@@ -213,7 +225,7 @@ class _MedicalRecordPageState extends State<MedicalRecordPage> {
       title: Text(RecordPresentation.title(doc.data())),
       subtitle: Text('${date.year}/${date.month}/${date.day} · '
           '${RecordPresentation.subtitle(doc.data())}'),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: const Icon(Icons.edit_outlined),
       onTap: () => Navigator.push(context, MaterialPageRoute(
         builder: (_) => RecordDetailPage(reference: doc.reference,
             petId: widget.petId))),
@@ -242,6 +254,10 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
   final _clinic = TextEditingController();
   final _doctor = TextEditingController();
   final _note = TextEditingController();
+  final _cost = TextEditingController();
+  final _reportText = TextEditingController();
+  final _picker = ImagePicker();
+  Uint8List? _reportPhoto;
   DateTime _date = DateTime.now();
   DateTime? _nextDate;
   String _type = '看診';
@@ -260,7 +276,38 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
   @override
   void dispose() {
     _title.dispose(); _clinic.dispose(); _doctor.dispose(); _note.dispose();
+    _cost.dispose();
+    _reportText.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickReportPhoto() async {
+    try {
+      final picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 65,
+        maxWidth: 1280,
+        maxHeight: 1280,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      if (bytes.lengthInBytes > 2 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('報告照片須小於 2 MB')),
+        );
+        return;
+      }
+      setState(() {
+        _reportPhoto = bytes;
+      });
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('選取報告照片失敗：$error')),
+        );
+      }
+    }
   }
 
   Future<void> _pickDate({required bool next}) async {
@@ -272,10 +319,32 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    final cost = _cost.text.trim().isEmpty ? null : double.tryParse(_cost.text.trim());
+    if (_cost.text.trim().isNotEmpty && (cost == null || cost < 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('費用請填大於或等於 0 的數字')));
+      return;
+    }
     setState(() => _saving = true);
     try {
       final vaccine = widget.vaccineOnly;
       final record = FirebaseFirestore.instance.collection('health_records').doc();
+      String? reportPhotoUrl;
+      if (!vaccine && _reportPhoto != null) {
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid == null) throw StateError('請先登入');
+        final isPng = _reportPhoto!.length >= 8 &&
+            _reportPhoto![0] == 0x89 && _reportPhoto![1] == 0x50 &&
+            _reportPhoto![2] == 0x4e && _reportPhoto![3] == 0x47;
+        final extension = isPng ? 'png' : 'jpg';
+        final ref = FirebaseStorage.instance.ref().child(
+          'medical_reports/$uid/${widget.petId}/${record.id}.$extension',
+        );
+        await ref.putData(_reportPhoto!, SettableMetadata(
+          contentType: isPng ? 'image/png' : 'image/jpeg',
+        )).timeout(const Duration(seconds: 35));
+        reportPhotoUrl = await ref.getDownloadURL();
+      }
       final data = <String, dynamic>{
         'petId': widget.petId,
         'recordType': vaccine ? 'vaccine' : 'medical',
@@ -288,6 +357,9 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
           '${_nextDate!.year}-${_nextDate!.month.toString().padLeft(2, '0')}-${_nextDate!.day.toString().padLeft(2, '0')}',
         'clinic': _clinic.text.trim(), 'doctor': _doctor.text.trim(),
         'note': _note.text.trim(), 'recordDate': Timestamp.fromDate(_date),
+        if (!vaccine) 'reportText': _reportText.text.trim(),
+        if (!vaccine && cost != null) 'cost': cost,
+        if (reportPhotoUrl != null) 'reportPhotoUrl': reportPhotoUrl,
         'owner_uid': FirebaseAuth.instance.currentUser?.uid,
         'createdAt': FieldValue.serverTimestamp(),
       };
@@ -364,18 +436,54 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
             items: List.generate(8, (i) => DropdownMenuItem(
                 value: i + 1, child: Text('第 ${i + 1} 劑'))),
             onChanged: (v) => setState(() => _dose = v ?? 1)),
-          TextFormField(controller: _clinic,
-            decoration: const InputDecoration(labelText: '醫院（選填）')),
-          TextFormField(controller: _doctor,
-            decoration: const InputDecoration(labelText: '醫師（選填）')),
           ListTile(title: Text('本次日期：${_date.year}/${_date.month}/${_date.day}'),
             trailing: const Icon(Icons.calendar_month), onTap: () => _pickDate(next: false)),
           if (widget.vaccineOnly) ListTile(
             title: Text(_nextDate == null ? '下次日期（選填）' :
                 '下次日期：${_nextDate!.year}/${_nextDate!.month}/${_nextDate!.day}'),
             trailing: const Icon(Icons.calendar_month), onTap: () => _pickDate(next: true)),
+          ExpansionTile(
+            maintainState: true,
+            title: const Text('補充資料（選填）'),
+            subtitle: const Text('醫院、醫師、備註與報告'),
+            children: [
+          TextFormField(controller: _clinic,
+            decoration: const InputDecoration(labelText: '醫院')),
+          TextFormField(controller: _doctor,
+            decoration: const InputDecoration(labelText: '醫師')),
           TextFormField(controller: _note,
-            decoration: const InputDecoration(labelText: '備註（選填）'), maxLines: 2),
+            decoration: const InputDecoration(labelText: '備註'), maxLines: 2),
+          if (!widget.vaccineOnly) TextFormField(controller: _cost,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: '就醫費用（選填）')),
+          if (!widget.vaccineOnly) ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _reportText,
+              maxLines: 6,
+              maxLength: 6000,
+              decoration: const InputDecoration(
+                labelText: '醫師報告全文（選填，可貼上文字）',
+                hintText: '貼上診察說明或檢驗報告文字，供 AI 整理',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _pickReportPhoto,
+              icon: const Icon(Icons.upload_file),
+              label: Text(_reportPhoto == null ? '選擇報告照片（選填）' : '已選報告照片，點此更換'),
+            ),
+            if (_reportPhoto != null)
+              TextButton(
+                onPressed: _saving ? null : () => setState(() {
+                  _reportPhoto = null;
+                }),
+                child: const Text('移除報告照片'),
+              ),
+            const Text('AI 僅整理報告內容；用藥與補充品請依醫師建議。',
+                style: TextStyle(fontSize: 12)),
+          ],
+          ]),
           const SizedBox(height: 14),
           SizedBox(width: double.infinity, child: FilledButton(
             onPressed: _saving ? null : _save,
@@ -385,3 +493,4 @@ class _MedicalEntryFormState extends State<_MedicalEntryForm> {
     );
   }
 }
+

@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 class MedicalClaimSelectorPage extends StatefulWidget {
   final String petId;
-  const MedicalClaimSelectorPage({super.key, this.petId = "pet_001"});
+  const MedicalClaimSelectorPage({super.key, required this.petId});
 
   @override
   State<MedicalClaimSelectorPage> createState() => _MedicalClaimSelectorPageState();
@@ -21,13 +21,14 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
 
     for (var doc in docs) {
       final data = doc.data();
-      final recordId = doc.id;
+      final recordId = doc.reference.path;
       if (_selectedRecordsMap[recordId] == true) {
         selectedRecords.add({
-          "record_id": recordId,
-          "visit_date": (data['visitDate'] ?? data['date'] ?? data['timestamp'] ?? '2026-10-18').toString(),
+          "record_id": doc.id,
+          "visit_date": _dateText(data['recordDate'] ?? data['visitDate'] ?? data['date'] ?? data['timestamp']),
           "diagnosis": (data['diagnosis'] ?? data['title'] ?? data['note'] ?? data['symptom'] ?? '一般醫療診察').toString(),
-          "cost": double.tryParse((data['cost'] ?? data['amount'] ?? 1000).toString()) ?? 1000.0,
+          // 舊 API 要求數字；未填費用用 0，畫面明確標示未填。
+          "cost": double.tryParse('${data['cost'] ?? ''}') ?? 0.0,
           "receipt_url": (data['receiptUrl'] ?? '').toString(),
         });
       }
@@ -60,16 +61,16 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
         setState(() {
-          _aiPrecheckNote = data['ai_precheck_note'];
+          _aiPrecheckNote = '${data['review_note'] ?? '已整理 ${selectedRecords.length} 筆就醫紀錄。請補齊未填的收據與費用，並依保單條款向保險公司確認是否可申請。'}';
         });
       } else {
         setState(() {
-          _aiPrecheckNote = "已打包 ${selectedRecords.length} 筆資料（伺服器預審回應碼：${response.statusCode}）";
+          _aiPrecheckNote = '已選 ${selectedRecords.length} 筆紀錄，但伺服器回應 ${response.statusCode}；請稍後重試。';
         });
       }
     } catch (e) {
       setState(() {
-        _aiPrecheckNote = "已完成本地理賠資料打包！（目前無法連線至雲端預審：$e）";
+        _aiPrecheckNote = '已選 ${selectedRecords.length} 筆紀錄，但目前無法連線整理：$e';
       });
     } finally {
       setState(() {
@@ -78,11 +79,18 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
     }
   }
 
+  String _dateText(Object? value) {
+    final date = value is Timestamp ? value.toDate()
+        : DateTime.tryParse('${value ?? ''}');
+    return date == null ? '未填日期' :
+      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('勾選就醫紀錄申請理賠'),
+        title: const Text('整理理賠資料'),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
       ),
@@ -100,21 +108,32 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
                 .collection('medical_records')
                 .snapshots(),
             builder: (context, subSnapshot) {
+              if (healthSnapshot.hasError || subSnapshot.hasError) {
+                return const Center(child: Text('就醫紀錄讀取失敗，請稍後重試'));
+              }
+              if (!healthSnapshot.hasData || !subSnapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-              // 收集並合併兩種路徑的所有文件，同時過濾出屬於醫療/疫苗的紀錄
+              // 收集既有兩種資料路徑，只選就醫紀錄供理賠資料整理。
               final List<QueryDocumentSnapshot<Map<String, dynamic>>> allDocs = [];
 
               if (healthSnapshot.hasData) {
                 for (var doc in healthSnapshot.data!.docs) {
                   final type = (doc.data()['recordType'] ?? doc.data()['type'] ?? '').toString();
-                  if (type == 'medical' || type == 'vaccine' || type.isEmpty) {
+                  if (type == 'medical' || type == '看診' || type == '醫療') {
                     allDocs.add(doc);
                   }
                 }
               }
 
-              if (subSnapshot.hasData) {
-                allDocs.addAll(subSnapshot.data!.docs);
+              for (final doc in subSnapshot.data!.docs) {
+                final type = '${doc.data()['recordType'] ?? doc.data()['type'] ?? ''}';
+                if (type == 'medical' || type == '看診' || type == '醫療' ||
+                    type == '結紮' || type == '驅蟲' ||
+                    (type.isEmpty && doc.data().containsKey('diagnosis'))) {
+                  allDocs.add(doc);
+                }
               }
 
               if (allDocs.isEmpty) {
@@ -132,7 +151,7 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
                         ),
                         SizedBox(height: 8),
                         Text(
-                          '請先至「健康存摺 -> 醫療紀錄」新增看診資料，即可在此勾選申請保險理賠！',
+                          '請先至寵物總覽的「醫療紀錄」新增看診資料，再回來勾選。',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey),
                         ),
@@ -150,11 +169,11 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
                       itemBuilder: (context, index) {
                         final doc = allDocs[index];
                         final data = doc.data();
-                        final recordId = doc.id;
+                        final recordId = doc.reference.path;
 
                         final diagnosis = (data['diagnosis'] ?? data['title'] ?? data['note'] ?? data['symptom'] ?? '一般醫療診察').toString();
-                        final visitDate = (data['visitDate'] ?? data['date'] ?? data['timestamp'] ?? '未填寫日期').toString();
-                        final cost = data['cost'] ?? data['amount'] ?? 1000;
+                        final visitDate = _dateText(data['recordDate'] ?? data['visitDate'] ?? data['date'] ?? data['timestamp']);
+                        final cost = data['cost'];
 
                         final isSelected = _selectedRecordsMap[recordId] ?? false;
 
@@ -166,7 +185,7 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
                               diagnosis,
                               style: const TextStyle(fontWeight: FontWeight.bold),
                             ),
-                            subtitle: Text("看診日期：$visitDate  |  費用：NT\$ $cost"),
+                            subtitle: Text('看診日期：$visitDate  |  費用：${cost == null ? '未填' : 'NT\$ $cost'}'),
                             value: isSelected,
                             onChanged: (bool? val) {
                               setState(() {
@@ -215,7 +234,7 @@ class _MedicalClaimSelectorPageState extends State<MedicalClaimSelectorPage> {
                         )
                             : const Icon(Icons.send_and_archive),
                         label: Text(
-                          _isLoading ? 'AI 預審與打包中...' : '勾選並產生理賠資料包 (AI 預審)',
+                          _isLoading ? '整理中…' : '整理已選的就醫紀錄',
                           style: const TextStyle(fontSize: 16),
                         ),
                         style: ElevatedButton.styleFrom(

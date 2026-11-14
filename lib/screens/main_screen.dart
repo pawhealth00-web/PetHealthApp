@@ -11,7 +11,6 @@ import 'login_page.dart';
 import 'pet_detail_page.dart';
 import 'history_record_page.dart';
 import 'user_profile_page.dart';
-import 'ai_analysis_page.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -22,7 +21,6 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   static const primaryColor = Color(0xFF174D3A);
-  static const secondaryColor = Color(0xFF4F7D63);
   static const backgroundColor = Color(0xFFF5F8F6);
   static const lightGreenColor = Color(0xFFE5F0EA);
 
@@ -110,13 +108,6 @@ class _MainScreenState extends State<MainScreen> {
 
   void _openProfile() => Navigator.push(context,
       MaterialPageRoute(builder: (_) => const UserProfilePage()));
-
-  void _openSelectedAnalysis(List<QueryDocumentSnapshot<Map<String, dynamic>>> pets) {
-    if (pets.isEmpty) return;
-    final pet = pets[_selectedPetIndex];
-    Navigator.push(context, MaterialPageRoute(builder: (_) => HealthAnalysisPage(
-      petId: pet.id, petName: pet.data()['name']?.toString() ?? '寵物')));
-  }
 
   void _openEditPetPage({
     required String petId,
@@ -276,7 +267,7 @@ class _MainScreenState extends State<MainScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               icon: const Icon(Icons.favorite_outline),
-              label: const Text('查看健康存摺', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: const Text('進入健康管理', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ),
         ],
@@ -391,8 +382,6 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         actions: [
-          IconButton(tooltip: '使用者資料', onPressed: _openProfile,
-            icon: const Icon(Icons.account_circle_outlined)),
           IconButton(tooltip: '登出', onPressed: _logout,
             icon: const Icon(Icons.logout)),
           const SizedBox(width: 6),
@@ -419,7 +408,7 @@ class _MainScreenState extends State<MainScreen> {
         },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: '首頁'),
-          NavigationDestination(icon: Icon(Icons.edit_note), label: '紀錄'),
+          NavigationDestination(icon: Icon(Icons.pets_outlined), label: '寵物'),
           NavigationDestination(icon: Icon(Icons.history), label: '健康存摺'),
           NavigationDestination(icon: Icon(Icons.person_outline), label: '我的'),
         ],
@@ -567,26 +556,10 @@ class _MainScreenState extends State<MainScreen> {
                     const SizedBox(height: 14),
                     _featureCard(
                       icon: Icons.restaurant_outlined,
-                      title: '每日健康紀錄',
-                      subtitle: '記錄飲食、排便與行為狀況',
+                      title: '進入寵物健康管理',
+                      subtitle: '總覽、每日紀錄、AI、醫療與保險',
                       color: const Color(0xFFE28B57),
                       onTap: openSelectedPet,
-                    ),
-                    const SizedBox(height: 12),
-                    _featureCard(
-                      icon: Icons.calendar_month_outlined,
-                      title: '最近七天紀錄',
-                      subtitle: '查看毛孩近期的健康變化',
-                      color: secondaryColor,
-                      onTap: _openHistory,
-                    ),
-                    const SizedBox(height: 12),
-                    _featureCard(
-                      icon: Icons.auto_awesome,
-                      title: 'AI 健康分析',
-                      subtitle: '根據近期紀錄提供健康提醒',
-                      color: primaryColor,
-                      onTap: () => _openSelectedAnalysis(pets),
                     ),
                   ],
                 ],

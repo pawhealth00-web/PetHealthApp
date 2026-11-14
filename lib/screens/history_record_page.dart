@@ -8,7 +8,8 @@ import 'record_presentation.dart';
 import 'medical_record_page.dart';
 
 class HistoryRecordPage extends StatefulWidget {
-  const HistoryRecordPage({super.key});
+  const HistoryRecordPage({super.key, this.petId});
+  final String? petId;
 
   @override
   State<HistoryRecordPage> createState() => _HistoryRecordPageState();
@@ -17,6 +18,12 @@ class HistoryRecordPage extends StatefulWidget {
 class _HistoryRecordPageState extends State<HistoryRecordPage> {
   static const _green = Color(0xFF2E7D5B);
   String? _selectedPetId;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPetId = widget.petId;
+  }
 
   Query<Map<String, dynamic>> get _petsQuery => FirebaseFirestore.instance
       .collection('pets')

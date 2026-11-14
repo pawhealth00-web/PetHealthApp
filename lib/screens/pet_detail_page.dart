@@ -10,6 +10,7 @@ import 'health_insights.dart';
 import 'record_detail_page.dart';
 import 'category_history_page.dart';
 import 'record_presentation.dart';
+import 'history_record_page.dart';
 
 class PetDetailPage extends StatefulWidget {
   final String petId;
@@ -33,17 +34,17 @@ class _PetDetailPageState extends State<PetDetailPage> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
+      _buildHealthDashboard(),
       DietRecordPage(petId: widget.petId, petName: widget.petName),
       BehaviorRecordPage(petId: widget.petId, petName: widget.petName),
       PoopRecordPage(petId: widget.petId, petName: widget.petName),
-      _buildHealthDashboard(),
     ];
 
     return Scaffold(
       backgroundColor: _background,
       appBar: AppBar(
-        title: Text('${widget.petName} 的專屬天地'),
-        backgroundColor: _currentIndex == 3 ? _green : Colors.brown,
+        title: Text('${widget.petName} 的健康管理'),
+        backgroundColor: _green,
         foregroundColor: Colors.white,
       ),
       body: IndexedStack(index: _currentIndex, children: pages),
@@ -51,13 +52,13 @@ class _PetDetailPageState extends State<PetDetailPage> {
         type: BottomNavigationBarType.fixed,
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
-        selectedItemColor: _currentIndex == 3 ? _green : Colors.brown,
+        selectedItemColor: _green,
         unselectedItemColor: Colors.grey,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.restaurant), label: '飲食紀錄'),
-          BottomNavigationBarItem(icon: Icon(Icons.mood), label: '行為紀錄'),
-          BottomNavigationBarItem(icon: Icon(Icons.pets), label: '排便追蹤'),
-          BottomNavigationBarItem(icon: Icon(Icons.health_and_safety), label: '健康存摺'),
+          BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: '總覽'),
+          BottomNavigationBarItem(icon: Icon(Icons.restaurant), label: '飲食'),
+          BottomNavigationBarItem(icon: Icon(Icons.mood), label: '行為'),
+          BottomNavigationBarItem(icon: Icon(Icons.pets), label: '排便'),
         ],
       ),
     );
@@ -145,6 +146,10 @@ class _PetDetailPageState extends State<PetDetailPage> {
                     _buildEmptyState()
                   else
                     ...records.take(5).map((record) => _buildRecordCard(record)),
+                  TextButton.icon(
+                    onPressed: () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => HistoryRecordPage(petId: widget.petId))),
+                    icon: const Icon(Icons.history), label: const Text('查看完整歷史紀錄')),
                 ],
               ),
             );
@@ -209,7 +214,7 @@ class _PetDetailPageState extends State<PetDetailPage> {
               ),
             ),
             icon: const Icon(Icons.shield),
-            label: const Text('寵物保險與理賠（健康存摺聯動）'),
+            label: const Text('保險與理賠'),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.teal,
               foregroundColor: Colors.white,

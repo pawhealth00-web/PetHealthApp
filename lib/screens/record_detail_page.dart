@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'health_insights.dart';
+import 'meal_slots.dart';
 
 class RecordDetailPage extends StatefulWidget {
   final DocumentReference<Map<String, dynamic>> reference;
@@ -35,6 +36,8 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
     'abnormal_behaviors': '異常行為', 'vaccineName': '疫苗名稱',
     'nextDate': '下次施打日期', 'title': '醫療項目', 'clinic': '醫院',
     'doctor': '醫師', 'doseNumber': '第幾劑', 'note': '備註', 'notes': '備註',
+    'reportText': '醫師報告全文',
+    'cost': '就醫費用',
   };
   static const _fields = <String, List<String>>{
     'diet': ['mealType', 'brand', 'foodName', 'amount', 'unit',
@@ -44,10 +47,10 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
     'behavior': ['mood', 'activity_level', 'sleep_status',
       'appetite_change', 'abnormal_behaviors', 'notes'],
     'vaccine': ['vaccineName', 'doseNumber', 'clinic', 'doctor', 'nextDate', 'note'],
-    'medical': ['title', 'clinic', 'doctor', 'note'],
+    'medical': ['title', 'clinic', 'doctor', 'cost', 'note', 'reportText'],
   };
   static const _options = <String, List<String>>{
-    'mealType': ['正餐', '點心', '其他'],
+    'mealType': MealSlots.choices,
     'appetite': ['正常', '不佳', '增加'],
     'waterStatus': ['正常', '不足', '增加'],
     'mood': ['平靜', '興奮', '焦慮', '疲倦', '警覺'],
@@ -111,7 +114,7 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
       final updates = <String, dynamic>{};
       for (final entry in _controllers.entries) {
         final raw = entry.value.text.trim();
-        if (['amount', 'finishedRatio', 'activity_level', 'count', 'doseNumber'].contains(entry.key)) {
+        if (['amount', 'finishedRatio', 'activity_level', 'count', 'doseNumber', 'cost'].contains(entry.key)) {
           if (raw.isNotEmpty && num.tryParse(raw) == null) throw FormatException('${_labels[entry.key]}請輸入數字');
           updates[entry.key] = raw.isEmpty ? null : num.parse(raw);
         } else {
@@ -124,9 +127,8 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
         updates['abnormal_behaviors'] = _behaviors.isEmpty ? ['無異常'] : _behaviors.toList();
       }
       if (_date != null) {
-        final oldDate = HealthInsights.date(data);
         final chosen = DateTime(_date!.year, _date!.month, _date!.day,
-            oldDate.hour, oldDate.minute);
+            _date!.hour, _date!.minute);
         updates[HealthInsights.type(data) == 'behavior' ? 'record_date' : 'recordDate'] =
             Timestamp.fromDate(chosen);
         if (HealthInsights.type(data) == 'behavior') {
@@ -135,12 +137,61 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
       }
       if (HealthInsights.type(data) == 'diet') {
         updates['foodType'] = updates['foodName'];
+        final selectedMeal = MealSlots.normalize(updates['mealType'] ?? data['mealType']);
+        final chosenDate = _date ?? HealthInsights.date(data);
+        if (MealSlots.isFixed(selectedMeal)) {
+          final all = await FirebaseFirestore.instance.collection('health_records')
+              .where('petId', isEqualTo: widget.petId).get();
+          final occupied = all.docs.any((doc) {
+            if (doc.reference.path == widget.reference.path ||
+                HealthInsights.type(doc.data()) != 'diet') return false;
+            final meal = MealSlots.normalize(doc.data()['mealType']);
+            return meal == selectedMeal &&
+                MealSlots.sameDay(HealthInsights.date(doc.data()), chosenDate);
+          });
+          if (occupied) throw StateError('這一天的 $selectedMeal 已有另一筆紀錄，請修改原紀錄。');
+        }
       }
       if (HealthInsights.type(data) == 'vaccine') {
         updates['title'] = updates['vaccineName'];
       }
       updates['updatedAt'] = FieldValue.serverTimestamp();
-      await widget.reference.update(updates);
+      if (HealthInsights.type(data) == 'diet') {
+        final oldDay = HealthInsights.date(data);
+        final newDay = _date ?? oldDay;
+        final oldMeal = MealSlots.normalize(data['mealType']);
+        final newMeal = MealSlots.normalize(updates['mealType'] ?? data['mealType']);
+        final moved = !MealSlots.sameDay(oldDay, newDay) || oldMeal != newMeal;
+        final wasFixedId = widget.reference.id.startsWith('diet_${widget.petId}_');
+        if (moved && (wasFixedId || MealSlots.isFixed(newMeal))) {
+          final collection = FirebaseFirestore.instance.collection('health_records');
+          final target = MealSlots.isFixed(newMeal)
+              ? collection.doc('diet_${widget.petId}_${MealSlots.dateKey(newDay)}_$newMeal')
+              : collection.doc();
+          await FirebaseFirestore.instance.runTransaction((transaction) async {
+            final source = await transaction.get(widget.reference);
+            if (!source.exists) throw StateError('原紀錄已不存在');
+            if (target.path != widget.reference.path &&
+                (await transaction.get(target)).exists) {
+              throw StateError('這一天的 $newMeal 已有紀錄');
+            }
+            if (target.path == widget.reference.path) {
+              transaction.update(widget.reference, updates);
+            } else {
+              transaction.set(target, {...?source.data(), ...updates});
+              transaction.delete(widget.reference);
+            }
+          });
+          if (mounted && target.path != widget.reference.path) {
+            Navigator.pop(context);
+            return;
+          }
+        } else {
+          await widget.reference.update(updates);
+        }
+      } else {
+        await widget.reference.update(updates);
+      }
       if (mounted) setState(() => _editing = false);
     } catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
@@ -180,9 +231,11 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
     }
     return Padding(padding: const EdgeInsets.symmetric(vertical: 6), child:
       TextField(controller: _controllers[field],
-        keyboardType: ['amount', 'finishedRatio', 'activity_level', 'count', 'doseNumber'].contains(field)
+        keyboardType: ['amount', 'finishedRatio', 'activity_level', 'count', 'doseNumber', 'cost'].contains(field)
             ? TextInputType.number : TextInputType.text,
-        maxLines: field == 'note' || field == 'notes' ? 3 : 1,
+        maxLines: field == 'reportText' ? 8 :
+            field == 'note' || field == 'notes' ? 3 : 1,
+        maxLength: field == 'reportText' ? 6000 : null,
         decoration: InputDecoration(labelText: label, border: const OutlineInputBorder())));
   }
 
@@ -211,9 +264,27 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
                 final chosen = await showDatePicker(context: context,
                   initialDate: _date ?? DateTime.now(), firstDate: DateTime(2000),
                   lastDate: DateTime.now().add(const Duration(days: 365)));
-                if (chosen != null) setState(() => _date = chosen);
+                if (chosen != null) setState(() {
+                  final current = _date ?? HealthInsights.date(data);
+                  _date = DateTime(chosen.year, chosen.month, chosen.day,
+                      current.hour, current.minute);
+                });
               }),
             if (_editing && _date != null) Text('改為 ${_date!.year}/${_date!.month}/${_date!.day}'),
+            if (type == 'diet') ListTile(
+              title: const Text('進食時間'),
+              subtitle: Text(TimeOfDay.fromDateTime(_editing ? (_date ?? HealthInsights.date(data))
+                  : HealthInsights.date(data)).format(context)),
+              trailing: _editing ? const Icon(Icons.edit) : null,
+              onTap: !_editing ? null : () async {
+                final current = _date ?? HealthInsights.date(data);
+                final picked = await showTimePicker(context: context,
+                    initialTime: TimeOfDay.fromDateTime(current));
+                if (picked != null) setState(() => _date = DateTime(
+                    current.year, current.month, current.day,
+                    picked.hour, picked.minute));
+              },
+            ),
             for (final field in fields)
               if (_editing) _editor(field) else ListTile(
                 title: Text(_labels[field] ?? field),
@@ -225,6 +296,12 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
             if (!_editing && '${data['photoUrl'] ?? ''}'.isNotEmpty)
               Image.network(data['photoUrl'].toString(), height: 210,
                 errorBuilder: (_, __, ___) => const Text('照片無法載入')),
+            if (!_editing && '${data['reportPhotoUrl'] ?? ''}'.isNotEmpty)
+              Column(children: [
+                const ListTile(title: Text('醫師報告照片')),
+                Image.network(data['reportPhotoUrl'].toString(), height: 260,
+                  errorBuilder: (_, __, ___) => const Text('報告照片無法載入')),
+              ]),
             if (!_editing) Card(child: Padding(padding: const EdgeInsets.all(16),
               child: Text('健康提醒：${HealthInsights.reminder(data)}'))),
             if (_editing) Padding(padding: const EdgeInsets.only(top: 16), child:
@@ -241,3 +318,4 @@ class _RecordDetailPageState extends State<RecordDetailPage> {
     );
   }
 }
+

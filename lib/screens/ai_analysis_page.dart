@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -73,14 +74,18 @@ class HealthAnalysisPage extends StatelessWidget {
 
   Widget _analysis(List<Map<String, dynamic>> allRecords) {
     final recentRecords = HealthInsights.recent(allRecords)
-        .where((record) => ['diet', 'behavior', 'poop']
+        .where((record) => ['diet', 'behavior', 'poop', 'medical']
             .contains(HealthInsights.type(record)))
         .toList()
       ..sort((a, b) =>
           HealthInsights.date(b).compareTo(HealthInsights.date(a)));
+    final scoredRecords = recentRecords.where((record) =>
+        ['diet', 'behavior', 'poop'].contains(HealthInsights.type(record)))
+        .toList();
 
     final score = HealthInsights.score(recentRecords);
     final deductions = HealthInsights.deductionBreakdown(recentRecords);
+    final bonuses = HealthInsights.bonusBreakdown(recentRecords);
     final counts = HealthInsights.warningCounts(recentRecords);
     final sortedDeductions = deductions.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
@@ -88,13 +93,14 @@ class HealthAnalysisPage extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 40),
       children: [
-        _scoreCard(score, recentRecords.length),
+        _scoreCard(score, scoredRecords.length),
         const SizedBox(height: 16),
         _GeminiHealthCard(
           petName: petName,
           score: score,
           records: recentRecords,
         ),
+        _catNutritionCard(recentRecords),
         const SizedBox(height: 22),
         const Text(
           '最近 7 天資料來源',
@@ -139,8 +145,20 @@ class HealthAnalysisPage extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 22),
+        const Text('穩定與恢復加分',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
+                color: _green)),
+        const SizedBox(height: 10),
+        if (bonuses.isEmpty)
+          _messageCard('目前沒有符合加分條件的穩定或恢復紀錄。')
+        else
+          Card(child: Column(children: bonuses.entries.map((entry) =>
+              ListTile(title: Text(entry.key), trailing: Text('+${entry.value}',
+                  style: const TextStyle(color: _green,
+                      fontWeight: FontWeight.bold)))).toList())),
+        const SizedBox(height: 22),
         const Text(
-          '健康扣分明細',
+          '目前健康扣分明細',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -148,10 +166,12 @@ class HealthAnalysisPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        if (recentRecords.isEmpty)
+        if (scoredRecords.isEmpty)
           _messageCard('最近七天沒有飲食、行為或排便紀錄，請先新增紀錄。')
         else if (sortedDeductions.isEmpty)
-          _messageCard('最近七天沒有記錄到明顯異常，目前不扣分。')
+          _messageCard(counts.isEmpty
+              ? '最近七天沒有記錄到明顯異常，目前不扣分。'
+              : '近期曾有異常紀錄；同類紀錄後續恢復穩定，目前舊警訊不再扣分。請繼續觀察。')
         else
           Card(
             elevation: 0,
@@ -212,6 +232,66 @@ class HealthAnalysisPage extends StatelessWidget {
     );
   }
 
+  Widget _catNutritionCard(List<Map<String, dynamic>> records) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('pets').doc(petId).snapshots(),
+      builder: (context, snapshot) {
+        final pet = snapshot.data?.data();
+        final species = (pet?['species'] ?? '').toString().toLowerCase();
+        if (!species.contains('貓') && !species.contains('cat')) {
+          return const SizedBox.shrink();
+        }
+        final birthday = pet?['birthday'];
+        int? age;
+        if (birthday is Timestamp) {
+          final born = birthday.toDate();
+          final now = DateTime.now();
+          age = now.year - born.year;
+          if (now.month < born.month ||
+              (now.month == born.month && now.day < born.day)) age--;
+          if (age < 0) age = null;
+        }
+        final treatRecords = records.where((record) {
+          if (HealthInsights.type(record) != 'diet') return false;
+          final food = '${record['foodName'] ?? record['foodType'] ?? ''}';
+          return food.contains('貓條') || food.contains('肉泥');
+        }).length;
+        return Padding(
+          padding: const EdgeInsets.only(top: 16),
+          child: Card(
+            color: _lightGreen,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('貓咪飲食提醒',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold,
+                          color: _green)),
+                  const SizedBox(height: 8),
+                  Text(age == null
+                      ? '若補上生日，可依年齡顯示照護討論提示。'
+                      : age >= 10
+                          ? '目前約 $age 歲；10 歲以上屬高齡階段，可在定期看診時請獸醫評估飲食與是否需要補充品。'
+                          : '目前約 $age 歲；是否需要保養品應依飲食、身體狀況與獸醫評估，不能只按年齡決定。'),
+                  const SizedBox(height: 8),
+                  Text(treatRecords >= 4
+                      ? '最近 7 天已記錄 $treatRecords 次貓條／肉泥。記錄較頻繁，請確認零食總熱量是否超過每日熱量的 10%，並詢問獸醫合適份量。'
+                      : treatRecords > 0
+                          ? '最近 7 天已記錄 $treatRecords 次貓條／肉泥。零食總熱量宜控制在每日熱量的 10% 以內；不確定份量可詢問獸醫。'
+                          : '貓條等零食宜留意總熱量；若不確定份量或保養品是否適合，請詢問獸醫。'),
+                  const SizedBox(height: 8),
+                  const Text('參考：WSAVA 寵物營養資料、FelineVMA 高齡貓照護指引。',
+                      style: TextStyle(fontSize: 12, color: _green)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _scoreCard(int? score, int recordCount) {
     final displayScore = score?.toString() ?? '--';
     final color = score == null
@@ -267,7 +347,7 @@ class HealthAnalysisPage extends StatelessWidget {
                 Text(
                   score == null
                       ? '尚無足夠資料可以計算'
-                      : '100 分起算，依異常紀錄扣分',
+                      : '80 分起算；穩定加分，後續正常紀錄逐日減少舊警訊扣分',
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 5),
@@ -324,14 +404,13 @@ class HealthAnalysisPage extends StatelessWidget {
   }
 
   Widget _deductionRow(String warning, int count, int totalPoints) {
-    final singlePenalty = HealthInsights.penalty(warning);
     return ListTile(
       leading: const CircleAvatar(
         backgroundColor: Color(0xFFFFECEC),
         child: Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
       ),
       title: Text(warning, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Text('出現 $count 次・每次扣 $singlePenalty 分'),
+      subtitle: Text('近七天出現 $count 次・恢復後目前仍計入 $totalPoints 分'),
       trailing: Text(
         '-$totalPoints',
         style: const TextStyle(
@@ -391,6 +470,7 @@ class _GeminiHealthCardState extends State<_GeminiHealthCard> {
   String? _analysis;
   String? _advice;
   String? _error;
+  String? _photoNotice;
 
   Map<String, dynamic> _recordSummary(Map<String, dynamic> record) {
     final category = HealthInsights.type(record);
@@ -422,8 +502,20 @@ class _GeminiHealthCardState extends State<_GeminiHealthCard> {
       add('顏色', record['color']);
       add('軟硬', record['consistency']);
       add('次數', record['frequency']);
+    } else if (category == 'medical') {
+      add('醫療項目', record['title']);
+      add('類型', record['type']);
+      add('醫院', record['clinic']);
+      add('醫師', record['doctor']);
+      final note = (record['note'] ?? '').toString().trim();
+      if (note.isNotEmpty) observations.add('醫師備註：${note.length > 1800 ? note.substring(0, 1800) : note}');
+      final report = (record['reportText'] ?? '').toString().trim();
+      if (report.isNotEmpty) observations.add('醫師報告全文：$report');
+      if ((record['reportPhotoUrl'] ?? '').toString().isNotEmpty) {
+        observations.add('本次醫療紀錄附有醫師報告照片');
+      }
     }
-    add('補充', record['note'] ?? record['notes']);
+    if (category != 'medical') add('補充', record['note'] ?? record['notes']);
     return {
       'record_date': date,
       'category': category,
@@ -443,13 +535,31 @@ class _GeminiHealthCardState extends State<_GeminiHealthCard> {
       _analysis = null;
       _advice = null;
       _error = null;
+      _photoNotice = null;
     });
     try {
-      final body = {
+      final body = <String, dynamic>{
         'pet_name': widget.petName,
         'score': widget.score,
         'records': widget.records.take(30).map(_recordSummary).toList(),
       };
+      final reportRecords = widget.records.take(30).where((record) =>
+          HealthInsights.type(record) == 'medical' &&
+          (record['reportPhotoUrl'] ?? '').toString().isNotEmpty);
+      if (reportRecords.isNotEmpty) {
+        final url = reportRecords.first['reportPhotoUrl'].toString();
+        try {
+          final bytes = await FirebaseStorage.instance.refFromURL(url)
+              .getData(2 * 1024 * 1024)
+              .timeout(const Duration(seconds: 20));
+          if (bytes == null) throw StateError('照片為空');
+          body['report_image_base64'] = base64Encode(bytes);
+          body['report_image_mime'] = url.toLowerCase().contains('.png')
+              ? 'image/png' : 'image/jpeg';
+        } catch (_) {
+          _photoNotice = '報告照片未能讀取；本次只分析文字紀錄。';
+        }
+      }
       final response = await http.post(
         _endpoint,
         headers: {'Content-Type': 'application/json'},
@@ -498,7 +608,9 @@ class _GeminiHealthCardState extends State<_GeminiHealthCard> {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
                     color: Color(0xFF174D3A))),
             const SizedBox(height: 8),
-            const Text('依最近七天的飲食、行為、排便紀錄整理趨勢。按下分析才會送出文字摘要。'),
+            const Text('依最近七天的飲食、行為、排便與醫療紀錄整理趨勢。醫師備註只作為文字參考，不自動加分。'),
+            if (_photoNotice != null) Text(_photoNotice!,
+                style: const TextStyle(color: Colors.deepOrange)),
             const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: _loading || widget.records.isEmpty ? null : _analyze,
@@ -532,3 +644,4 @@ class _GeminiHealthCardState extends State<_GeminiHealthCard> {
     );
   }
 }
+

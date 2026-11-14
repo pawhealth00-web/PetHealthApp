@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// 這是專題使用的簡易風險提示，不是獸醫診斷。扣分數值集中在
 /// [penaltyRules]，之後要調整規則時只需要修改這個表格。
 class HealthInsights {
+  static const int baseScore = 80;
   static const Map<String, int> penaltyRules = {
     // 飲食
     '嘔吐': 20,
@@ -142,8 +143,31 @@ class HealthInsights {
     }).toList();
   }
 
-  /// 回傳每一種異常在最近七天造成的總扣分。
-  /// 同一筆紀錄內的相同異常只扣一次；不同日期重複出現則會累加。
+  static DateTime _day(Map<String, dynamic> record) {
+    final value = date(record);
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  static bool _observed(Map<String, dynamic> record) {
+    return switch (type(record)) {
+      'diet' => ('${record['foodName'] ?? record['foodType'] ?? ''}'
+                  '${record['brand'] ?? ''}')
+              .trim()
+              .isNotEmpty ||
+          record['amount'] is num,
+      'poop' => record['shape'] != null &&
+          record['color'] != null &&
+          record['consistency'] != null,
+      'behavior' => record['mood'] != null &&
+          record['activity_level'] != null &&
+          record['sleep_status'] != null,
+      _ => false,
+    };
+  }
+
+  /// 每種警訊只看最近一次出現；同類別之後每有一個完整、無警訊的
+  /// 紀錄日，就減少 10 分舊扣分。當天若也有異常，不視為恢復。
+  /// 歷史出現次數另外保留在 [warningCounts]，不會反覆扣到零分。
   static Map<String, int> deductionBreakdown(
     Iterable<Map<String, dynamic>> records, {
     String? category,
@@ -152,16 +176,38 @@ class HealthInsights {
       final recordType = type(record);
       if (category != null) return recordType == category;
       return ['diet', 'poop', 'behavior'].contains(recordType);
-    });
-
-    final deductions = <String, int>{};
+    }).toList();
+    final lastWarning = <String, Map<String, DateTime>>{};
+    final cleanDays = <String, Set<DateTime>>{};
+    final warnedDays = <String, Set<DateTime>>{};
     for (final record in items) {
-      for (final warning in warnings(record).toSet()) {
-        deductions.update(
-          warning,
-          (value) => value + penalty(warning),
-          ifAbsent: () => penalty(warning),
-        );
+      final kind = type(record);
+      final day = _day(record);
+      final found = warnings(record).toSet();
+      if (found.isNotEmpty) {
+        warnedDays.putIfAbsent(kind, () => <DateTime>{}).add(day);
+        final latest = lastWarning.putIfAbsent(kind, () => <String, DateTime>{});
+        for (final warning in found) {
+          if (latest[warning] == null || day.isAfter(latest[warning]!)) {
+            latest[warning] = day;
+          }
+        }
+      } else if (_observed(record)) {
+        cleanDays.putIfAbsent(kind, () => <DateTime>{}).add(day);
+      }
+    }
+    final deductions = <String, int>{};
+    for (final entry in lastWarning.entries) {
+      final kind = entry.key;
+      for (final warning in entry.value.entries) {
+        final daysRecovered = (cleanDays[kind] ?? <DateTime>{}).where((day) =>
+            day.isAfter(warning.value) &&
+            !(warnedDays[kind]?.contains(day) ?? false)).length;
+        final remaining = penalty(warning.key) - 10 * daysRecovered;
+        if (remaining > 0) {
+          deductions.update(warning.key, (value) => value + remaining,
+              ifAbsent: () => remaining);
+        }
       }
     }
     return deductions;
@@ -185,6 +231,47 @@ class HealthInsights {
     return counts;
   }
 
+  /// 只有有內容且未記錄警訊的紀錄才可能加分；每類每天至多一次。
+  /// 一週穩定紀錄最多加 20 分，異常之後另一天恢復加 6 分。
+  static Map<String, int> bonusBreakdown(
+    Iterable<Map<String, dynamic>> records, {String? category}
+  ) {
+    final items = recent(records).where((record) {
+      final kind = type(record);
+      return category == null
+          ? ['diet', 'behavior', 'poop'].contains(kind)
+          : kind == category;
+    }).toList()..sort((a, b) => date(a).compareTo(date(b)));
+    final countedDays = <String>{};
+    final warningDays = <String>{};
+    final warnedOn = <String, DateTime>{};
+    var normalPoints = 0;
+    var recovered = false;
+    for (final record in items) {
+      if (warnings(record).isEmpty) continue;
+      final day = date(record);
+      warningDays.add('${type(record)}-${DateTime(day.year, day.month, day.day).toIso8601String()}');
+    }
+    for (final record in items) {
+      final kind = type(record);
+      final day = DateTime(date(record).year, date(record).month, date(record).day);
+      if (warnings(record).isNotEmpty) {
+        warnedOn[kind] = day;
+        continue;
+      }
+      if (!_observed(record)) continue;
+      final dayKey = '$kind-${day.toIso8601String()}';
+      if (warningDays.contains(dayKey)) continue;
+      if (countedDays.add(dayKey)) normalPoints += 4;
+      final earlier = warnedOn[kind];
+      if (earlier != null && day.isAfter(earlier)) recovered = true;
+    }
+    return {
+      if (normalPoints > 0) '穩定紀錄': normalPoints.clamp(0, 20).toInt(),
+      if (recovered) '異常後恢復': 6,
+    };
+  }
+
   static int? score(
     Iterable<Map<String, dynamic>> records, {
     String? category,
@@ -199,7 +286,9 @@ class HealthInsights {
     final deductions = deductionBreakdown(items, category: category)
         .values
         .fold<int>(0, (sum, points) => sum + points);
-    return (100 - deductions).clamp(0, 100).toInt();
+    final bonuses = bonusBreakdown(items, category: category)
+        .values.fold<int>(0, (sum, points) => sum + points);
+    return (baseScore + bonuses - deductions).clamp(0, 100).toInt();
   }
 
   static String level(int? score) {
@@ -231,3 +320,4 @@ class HealthInsights {
     return '本次記錄：${found.join('、')}。若持續或加劇，請諮詢獸醫。';
   }
 }
+
